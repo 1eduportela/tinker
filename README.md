@@ -16,7 +16,7 @@ Sin dependencias: solo Node.js (usa el SQLite integrado).
 
 ## Cómo funciona
 - **Proyectos** (como en GitHub): archivos, README y Multimedia.
-- **Publicaciones** (como en Instagram): foto, título y descripción. Siempre pertenecen a un proyecto y aparecen en su Multimedia.
+- **Publicaciones** (como en Instagram): carrusel de hasta 10 fotos y vídeos (MP4, MOV o WebM, máx. 300 MB), título y descripción. Siempre pertenecen a un proyecto y aparecen en su Multimedia.
 - **Perfil**: banner, Bienvenida, Proyectos y Contacto (chat).
 - **Sin me gusta ni comentarios**, a propósito: así no hay interés en meter bots ni en perseguir números.
 

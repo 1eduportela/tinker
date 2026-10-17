@@ -22,6 +22,11 @@ const ICONS = {
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   chevron: '<polyline points="6 9 12 15 18 9"/>',
+  left: '<polyline points="15 18 9 12 15 6"/>',
+  right: '<polyline points="9 18 15 12 9 6"/>',
+  play: '<polygon points="6 4 20 12 6 20 6 4"/>',
+  layers: '<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M3 17V5a2 2 0 0 1 2-2h12"/>',
+  video: '<rect x="2" y="6" width="14" height="12" rx="2"/><polygon points="22 8 16 12 22 16 22 8"/>',
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
 };
@@ -108,6 +113,116 @@ function preload(post) {
   });
 }
 
+// =============== Fotos y vídeos ===============
+const MAX_MEDIA = 10;
+const MAX_VIDEO_MB = 300;
+function imageToBlob(file, max = 2000) {
+  if (file.type === 'image/gif') {
+    return new Promise((resolve, reject) => {
+      const img = new Image(); const url = URL.createObjectURL(file);
+      img.onload = () => resolve({ blob: file, width: img.naturalWidth, height: img.naturalHeight, preview: url });
+      img.onerror = () => reject(new Error('No se pudo leer la imagen'));
+      img.src = url;
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const img = new Image(); const src = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(src);
+      c.toBlob(b => b ? resolve({ blob: b, width: c.width, height: c.height, preview: URL.createObjectURL(b) })
+        : reject(new Error('No se pudo preparar la imagen')), 'image/jpeg', 0.88);
+    };
+    img.onerror = () => reject(new Error(`No se pudo leer "${file.name}"`));
+    img.src = src;
+  });
+}
+// Lee tamaño del vídeo y saca una miniatura para usarla de portada
+function videoInfo(file) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
+    let done = false;
+    const finish = (poster) => {
+      if (done) return; done = true;
+      resolve({ width: v.videoWidth || null, height: v.videoHeight || null, duration: v.duration || 0, poster, preview: url });
+    };
+    const timer = setTimeout(() => finish(null), 8000);
+    v.onerror = () => { clearTimeout(timer); finish(null); };
+    v.onloadedmetadata = () => { try { v.currentTime = Math.min(0.5, (v.duration || 1) / 3); } catch { finish(null); } };
+    v.onseeked = () => {
+      try {
+        const k = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+        const c = document.createElement('canvas'); c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
+        c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+        c.toBlob(b => { clearTimeout(timer); finish(b ? { blob: b, url: URL.createObjectURL(b) } : null); }, 'image/jpeg', 0.85);
+      } catch { clearTimeout(timer); finish(null); }
+    };
+  });
+}
+function uploadMedia(blob, kind, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/media?kind=${kind}`);
+    xhr.upload.onprogress = e => e.lengthComputable && onProgress && onProgress(e.loaded / e.total);
+    xhr.onload = () => {
+      let d = {}; try { d = JSON.parse(xhr.responseText); } catch {}
+      xhr.status < 300 ? resolve(d.url) : reject(new Error(d.error || 'No se pudo subir'));
+    };
+    xhr.onerror = () => reject(new Error('Se cortó la conexión'));
+    xhr.send(blob);
+  });
+}
+function fmtDuration(sec) {
+  if (!sec || !isFinite(sec)) return '';
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Carrusel de la publicación abierta
+function carousel(media) {
+  let i = 0;
+  const many = media.length > 1;
+  const stage = h('div', { class: 'car-stage' + (many ? ' fixed' : '') });
+  const counter = h('div', { class: 'car-count' });
+  const dots = h('div', { class: 'car-dots' });
+  const prev = h('button', { class: 'car-nav prev', title: 'Anterior', onclick: e => { e.stopPropagation(); go(i - 1); } }, icon('left'));
+  const next = h('button', { class: 'car-nav next', title: 'Siguiente', onclick: e => { e.stopPropagation(); go(i + 1); } }, icon('right'));
+  function paint() {
+    const m = media[i];
+    stage.querySelectorAll('video').forEach(v => v.pause());
+    stage.replaceChildren(m.kind === 'video'
+      ? h('video', { src: m.url, poster: m.poster || null, controls: true, playsinline: true, preload: 'metadata' })
+      : h('img', { src: m.url, alt: '' }));
+    if (!many) return;
+    counter.textContent = `${i + 1} / ${media.length}`;
+    prev.hidden = i === 0; next.hidden = i === media.length - 1;
+    dots.replaceChildren(...media.map((_, k) => h('button', { class: 'car-dot' + (k === i ? ' on' : ''), title: `${k + 1}`, onclick: () => go(k) })));
+  }
+  function go(n) { if (n < 0 || n >= media.length || n === i) return; i = n; paint(); }
+  const el = h('div', { class: 'pm-media car' }, stage, many && prev, many && next, many && counter, many && dots);
+  if (many) {
+    const onKey = e => {
+      if (!el.isConnected) return document.removeEventListener('keydown', onKey);
+      if (e.key === 'ArrowLeft') go(i - 1); else if (e.key === 'ArrowRight') go(i + 1);
+    };
+    document.addEventListener('keydown', onKey);
+    let x0 = null;
+    el.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive: true });
+    el.addEventListener('touchend', e => {
+      if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0; x0 = null;
+      if (Math.abs(dx) > 40) go(i + (dx < 0 ? 1 : -1));
+    });
+  }
+  paint();
+  return el;
+}
+
 // =============== Ventanas (modales) ===============
 function modal(content, cls = '', onClose) {
   const box = h('div', { class: `modal ${cls}` }, h('button', { class: 'icon-btn modal-x', title: 'Cerrar', onclick: () => close() }, icon('x')), content);
@@ -131,9 +246,9 @@ function modal(content, cls = '', onClose) {
 }
 
 function openPost(post, onDelete) {
-  const media = post.image
-    ? h('div', { class: 'pm-media' }, h('img', { src: post.image, alt: '' }))
-    : h('div', { class: 'pm-media text', style: `--c:${colorFor(post.author.username)}` }, post.text);
+  const media = post.media && post.media.length
+    ? carousel(post.media)
+    : h('div', { class: 'pm-media text' }, post.text);
   const m = modal(h('div', { class: 'pm' }, media,
     h('div', { class: 'pm-side' },
       h('div', { class: 'row pm-head' },
@@ -163,48 +278,103 @@ async function openComposer(onPost, presetProjectId) {
   if (!projects.length) {
     const m = modal(h('div', {},
       h('h2', {}, 'Primero, un proyecto'),
-      h('p', { class: 'muted' }, 'En Tinker cada publicación pertenece a un proyecto. Crea uno y luego sube tu foto.'),
+      h('p', { class: 'muted' }, 'En Tinker cada publicación pertenece a un proyecto. Crea uno y luego sube tus fotos o vídeos.'),
       h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { class: 'spacer' }),
         h('button', { class: 'btn', onclick: () => { m.close(); openNewProject(p => openComposer(onPost, p.id)); } }, 'Crear proyecto'))));
     return;
   }
-  let image = null;
+  const items = [];   // { kind, source, blob, preview, width, height, duration, poster }
+  let busy = false;
   const select = h('select', { class: 'select' },
     ...projects.map(p => h('option', { value: p.id, selected: String(p.id) === String(presetProjectId) }, p.name)));
   const title = h('input', { type: 'text', maxlength: 100, placeholder: 'Ej.: Primer prototipo del brazo funcionando' });
   const text = h('textarea', { rows: 4, maxlength: 2000, placeholder: 'Cuéntalo: qué se ve, cómo lo hiciste, qué aprendiste…' });
-  const drop = h('div', { class: 'drop' });
-  const paint = () => drop.replaceChildren(image
-    ? h('div', { class: 'drop-preview' }, h('img', { src: image }),
-        h('button', { class: 'icon-btn', title: 'Quitar foto', onclick: e => { e.stopPropagation(); image = null; paint(); } }, icon('x')))
-    : h('div', { class: 'drop-empty' }, icon('image'), h('div', {}, 'Haz clic o arrastra aquí la foto')));
+  const picker = h('input', { type: 'file', accept: 'image/*,video/mp4,video/webm,video/quicktime', multiple: true, hidden: true });
+  const area = h('div', { class: 'media-area' });
+  const progress = h('div', { class: 'upload-bar', hidden: true });
+
+  async function add(files) {
+    files = [...files].filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'));
+    if (!files.length) return toast('Elige fotos o vídeos');
+    const room = MAX_MEDIA - items.length;
+    if (files.length > room) toast(`Máximo ${MAX_MEDIA} por publicación: se añaden ${Math.max(room, 0)}`);
+    for (const f of files.slice(0, Math.max(room, 0))) {
+      try {
+        if (f.type.startsWith('video/')) {
+          if (f.size > MAX_VIDEO_MB * 1024 * 1024) { toast(`"${f.name}" pasa de ${MAX_VIDEO_MB} MB`); continue; }
+          const info = await videoInfo(f);
+          items.push({ kind: 'video', blob: f, preview: info.poster ? info.poster.url : null, video: info.preview,
+            width: info.width, height: info.height, duration: info.duration, poster: info.poster && info.poster.blob });
+        } else {
+          const r = await imageToBlob(f);
+          items.push({ kind: 'image', blob: r.blob, preview: r.preview, width: r.width, height: r.height });
+        }
+      } catch (e) { toast(e.message); }
+      paint();
+    }
+  }
+  function move(k, d) { const j = k + d; if (j < 0 || j >= items.length) return; [items[k], items[j]] = [items[j], items[k]]; paint(); }
+  function paint() {
+    if (!items.length) {
+      area.replaceChildren(h('div', { class: 'drop', onclick: () => picker.click() },
+        h('div', { class: 'drop-empty' }, icon('image'),
+          h('div', {}, 'Haz clic o arrastra aquí fotos y vídeos'),
+          h('small', { class: 'muted' }, `Hasta ${MAX_MEDIA}. La primera será la portada. Vídeos MP4, MOV o WebM de hasta ${MAX_VIDEO_MB} MB.`))));
+      return;
+    }
+    area.replaceChildren(h('div', { class: 'thumbs' },
+      ...items.map((it, k) => h('div', { class: 'thumb' + (k === 0 ? ' cover' : '') },
+        it.preview ? h('img', { src: it.preview, alt: '' }) : h('div', { class: 'thumb-ph' }, icon('video')),
+        it.kind === 'video' && h('span', { class: 'thumb-badge' }, icon('play'), fmtDuration(it.duration)),
+        k === 0 && h('span', { class: 'thumb-cover' }, 'Portada'),
+        h('div', { class: 'thumb-tools' },
+          h('button', { title: 'Mover a la izquierda', disabled: k === 0, onclick: () => move(k, -1) }, icon('left')),
+          h('button', { title: 'Quitar', onclick: () => { items.splice(k, 1); paint(); } }, icon('x')),
+          h('button', { title: 'Mover a la derecha', disabled: k === items.length - 1, onclick: () => move(k, 1) }, icon('right'))))),
+      items.length < MAX_MEDIA && h('button', { class: 'thumb add', onclick: () => picker.click(), title: 'Añadir más' },
+        icon('plus'), h('span', {}, `${items.length}/${MAX_MEDIA}`))));
+  }
+  picker.onchange = () => { add(picker.files); picker.value = ''; };
+  area.ondragover = e => { e.preventDefault(); area.classList.add('over'); };
+  area.ondragleave = () => area.classList.remove('over');
+  area.ondrop = e => { e.preventDefault(); area.classList.remove('over'); add(e.dataTransfer.files); };
   paint();
-  drop.onclick = () => { if (!image) pickImage(d => { image = d; paint(); }); };
-  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
-  drop.ondragleave = () => drop.classList.remove('over');
-  drop.ondrop = async e => {
-    e.preventDefault(); drop.classList.remove('over');
-    const f = e.dataTransfer.files[0];
-    if (f && f.type.startsWith('image/')) try { image = await resizeImage(f); paint(); } catch (err) { toast(err.message); }
-  };
+
   const btn = h('button', { class: 'btn' }, 'Publicar');
   btn.onclick = async () => {
-    if (!image) return toast('Añade una foto');
+    if (busy) return;
+    if (!items.length) return toast('Añade al menos una foto o un vídeo');
     if (!title.value.trim()) return toast('Ponle un título');
-    btn.disabled = true;
+    busy = true; btn.disabled = true; progress.hidden = false;
+    const total = items.reduce((n, it) => n + it.blob.size + (it.poster ? it.poster.size : 0), 0) || 1;
+    let sent = 0;
+    const bar = (label, frac, size) => progress.replaceChildren(
+      h('div', { class: 'upload-txt' }, label),
+      h('div', { class: 'upload-track' }, h('div', { class: 'upload-fill', style: `width:${Math.round(((sent + frac * size) / total) * 100)}%` })));
     try {
-      const { post } = await api('POST', '/api/posts', { projectId: Number(select.value), title: title.value, text: text.value, image });
+      const media = [];
+      for (let k = 0; k < items.length; k++) {
+        const it = items[k];
+        const label = `Subiendo ${k + 1} de ${items.length}${it.kind === 'video' ? ' (vídeo)' : ''}…`;
+        const url = await uploadMedia(it.blob, it.kind, f => bar(label, f, it.blob.size));
+        sent += it.blob.size;
+        let poster = null;
+        if (it.poster) { poster = await uploadMedia(it.poster, 'image', f => bar(label, f, it.poster.size)); sent += it.poster.size; }
+        media.push({ kind: it.kind, url, poster, width: it.width || undefined, height: it.height || undefined });
+      }
+      bar('Publicando…', 0, 0);
+      const { post } = await api('POST', '/api/posts', { projectId: Number(select.value), title: title.value, text: text.value, media });
       m.close(); toast('¡Publicado!'); onPost && onPost(post);
     } catch (e) { toast(e.message); }
-    btn.disabled = false;
+    busy = false; btn.disabled = false; progress.hidden = true;
   };
   const m = modal(h('div', { class: 'composer' },
-    h('h2', {}, 'Nueva publicación'), h('div', { class: 'muted' }, 'Una foto de tu proyecto, con su título y descripción.'),
-    drop,
+    h('h2', {}, 'Nueva publicación'), h('div', { class: 'muted' }, 'Fotos y vídeos de tu proyecto, con su título y descripción.'),
+    area, picker, progress,
     h('label', {}, 'Proyecto'), select,
     h('label', {}, 'Título'), title,
     h('label', {}, 'Descripción'), text,
-    h('div', { class: 'row' }, h('div', { class: 'spacer' }), btn)));
+    h('div', { class: 'row', style: 'margin-top:14px' }, h('div', { class: 'spacer' }), btn)));
 }
 
 function openEditProfile() {
@@ -331,10 +501,17 @@ function tile(post, ctl) {
     h('span', { class: 'spacer' }),
     post.project && h('a', { href: `#/p/${post.project.id}/multimedia`, class: 'tile-proj', title: post.project.name,
       onclick: e => e.stopPropagation() }, icon('folder'), h('span', {}, post.project.name)));
+  const media = post.media || [];
+  const hasVideo = media.some(x => x.kind === 'video');
+  const cover = post.image
+    ? h('img', { src: post.image, alt: '', width: post._w, height: post._h })
+    : media.length ? h('div', { class: 'tile-video-ph' }, icon('play'))
+      : h('div', { class: 'tile-text' }, post.text);
+  const badges = (media.length > 1 || hasVideo) && h('div', { class: 'tile-badges' },
+    hasVideo && h('span', { title: 'Tiene vídeo' }, icon('play')),
+    media.length > 1 && h('span', { title: `${media.length} fotos o vídeos` }, icon('layers'), media.length));
   const t = h('article', { class: 'tile' },
-    post.image
-      ? h('img', { src: post.image, alt: '', width: post._w, height: post._h })
-      : h('div', { class: 'tile-text', style: `--c:${colorFor(post.author.username)}` }, post.text),
+    h('div', { class: 'tile-cover' }, cover, badges),
     post.image && (post.title || post.text) && h('p', { class: 'tile-caption' }, post.title || post.text),
     meta);
   t.onclick = () => openPost(post, () => ctl.remove(t));

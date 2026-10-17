@@ -21,6 +21,9 @@ const DATA = path.join(ROOT, 'data');
 const UPLOADS = path.join(DATA, 'uploads');
 const FILES = path.join(DATA, 'files');
 const MAX_FILE = 50 * 1024 * 1024;
+const MAX_IMAGE = 15 * 1024 * 1024;
+const MAX_VIDEO = 300 * 1024 * 1024;
+const MAX_MEDIA_PER_POST = 10;
 const PUBLIC = path.join(ROOT, 'public');
 fs.mkdirSync(UPLOADS, { recursive: true });
 fs.mkdirSync(FILES, { recursive: true });
@@ -85,6 +88,23 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(from_id, to_id);
 CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_id, read_at);
+CREATE TABLE IF NOT EXISTS media_uploads (
+  url TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS post_media (
+  id INTEGER PRIMARY KEY,
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  url TEXT NOT NULL,
+  poster TEXT,
+  width INTEGER,
+  height INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_post_media_post ON post_media(post_id, position);
 CREATE TABLE IF NOT EXISTS project_files (
   id INTEGER PRIMARY KEY,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -219,9 +239,21 @@ const POST_SELECT = `
   SELECT p.id, p.user_id, p.title, p.text, p.image, p.created_at, p.project_id, pr.name AS project_name,
          u.username, u.display_name, u.avatar
   FROM posts p JOIN users u ON u.id = p.user_id LEFT JOIN projects pr ON pr.id = p.project_id`;
-function mapPost(r, me) {
+function mapPosts(rows, me) {
+  if (!rows.length) return [];
+  const ids = rows.map(r => r.id);
+  const media = db.prepare(`SELECT * FROM post_media WHERE post_id IN (${ids.map(() => '?').join(',')}) ORDER BY position`).all(...ids);
+  const byPost = new Map();
+  for (const m of media) {
+    if (!byPost.has(m.post_id)) byPost.set(m.post_id, []);
+    byPost.get(m.post_id).push({ kind: m.kind, url: m.url, poster: m.poster, width: m.width, height: m.height });
+  }
+  return rows.map(r => mapPost(r, me, byPost.get(r.id)));
+}
+function mapPost(r, me, media) {
+  if (!media || !media.length) media = r.image ? [{ kind: 'image', url: r.image, poster: null, width: null, height: null }] : [];
   return {
-    id: r.id, title: r.title, text: r.text, image: r.image, createdAt: r.created_at,
+    id: r.id, title: r.title, text: r.text, image: r.image, media, createdAt: r.created_at,
     project: r.project_id ? { id: r.project_id, name: r.project_name } : null,
     author: { username: r.username, displayName: r.display_name, avatar: r.avatar },
     mine: r.user_id === me.id,
@@ -230,7 +262,7 @@ function mapPost(r, me) {
 function getPost(id, me) {
   const r = db.prepare(POST_SELECT + ' WHERE p.id = ?').get(id);
   if (!r) throw new HttpError(404, 'Publicacion no encontrada');
-  return mapPost(r, me);
+  return mapPosts([r], me)[0];
 }
 
 // ---------- API ----------
@@ -306,8 +338,59 @@ route('GET', '/api/feed', async (req, res, url) => {
   } else {
     rows = db.prepare(POST_SELECT + ' WHERE p.id < ? ORDER BY p.id DESC LIMIT 20').all(before);
   }
-  send(res, 200, { posts: rows.map(r => mapPost(r, me)) });
+  send(res, 200, { posts: mapPosts(rows, me) });
 });
+
+// Sube una foto o un vídeo (el archivo va tal cual en el cuerpo). Devuelve su dirección para usarla en una publicación.
+const MEDIA_RE = /^\/uploads\/[a-f0-9]{24}\.(jpg|png|webp|gif|mp4|webm|mov)$/;
+function sniffMedia(buf) {
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { kind: 'image', ext: 'jpg' };
+  if (buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { kind: 'image', ext: 'png' };
+  if (buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') return { kind: 'image', ext: 'webp' };
+  if (buf.slice(0, 3).toString() === 'GIF') return { kind: 'image', ext: 'gif' };
+  if (buf.slice(4, 8).toString() === 'ftyp') return { kind: 'video', ext: buf.slice(8, 10).toString() === 'qt' ? 'mov' : 'mp4' };
+  if (buf.slice(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return { kind: 'video', ext: 'webm' };
+  return null;
+}
+route('POST', '/api/media', async (req, res, url) => {
+  const me = requireUser(req);
+  const want = url.searchParams.get('kind') === 'video' ? 'video' : 'image';
+  const limit = want === 'video' ? MAX_VIDEO : MAX_IMAGE;
+  const tmp = path.join(UPLOADS, 'tmp-' + crypto.randomBytes(8).toString('hex'));
+  await new Promise((resolve, reject) => {
+    let size = 0, failed = false;
+    const out = fs.createWriteStream(tmp);
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit && !failed) {
+        failed = true; req.unpipe(out); out.destroy(); fs.rm(tmp, () => {}); req.resume();
+        reject(new HttpError(413, want === 'video' ? 'El video pasa de 300 MB' : 'La foto pasa de 15 MB'));
+      }
+    });
+    req.pipe(out);
+    out.on('finish', () => { if (!failed) resolve(); });
+    out.on('error', e => { if (!failed) { failed = true; reject(e); } });
+  });
+  const fd = fs.openSync(tmp, 'r'); const head = Buffer.alloc(16); fs.readSync(fd, head, 0, 16, 0); fs.closeSync(fd);
+  const type = sniffMedia(head);
+  if (!type || type.kind !== want) {
+    fs.rm(tmp, () => {});
+    throw new HttpError(400, want === 'video' ? 'Formato de video no valido (usa MP4, MOV o WebM)' : 'Formato de imagen no valido');
+  }
+  const name = crypto.randomBytes(12).toString('hex') + '.' + type.ext;
+  fs.renameSync(tmp, path.join(UPLOADS, name));
+  const mediaUrl = '/uploads/' + name;
+  db.prepare('INSERT INTO media_uploads (url, user_id, kind, created_at) VALUES (?, ?, ?, ?)').run(mediaUrl, me.id, type.kind, Date.now());
+  send(res, 200, { url: mediaUrl, kind: type.kind });
+});
+
+function ownUpload(u, me, kind) {
+  if (typeof u !== 'string' || !MEDIA_RE.test(u)) return false;
+  const r = db.prepare('SELECT user_id, kind FROM media_uploads WHERE url = ?').get(u);
+  if (!r || r.user_id !== me.id || r.kind !== kind) return false;
+  // Cada archivo subido solo puede usarse una vez (al borrar una publicacion se borran sus archivos)
+  return !db.prepare('SELECT 1 FROM post_media WHERE url = ? OR poster = ?').get(u, u);
+}
 
 route('POST', '/api/posts', async (req, res) => {
   const me = requireUser(req);
@@ -315,23 +398,57 @@ route('POST', '/api/posts', async (req, res) => {
   const title = str(b.title, 100, 'El titulo');
   const text = str(b.text, 2000, 'La descripcion');
   if (!title) throw new HttpError(400, 'Ponle un titulo a la publicacion');
-  if (!b.image) throw new HttpError(400, 'Anade una foto');
   const project = db.prepare('SELECT id, user_id FROM projects WHERE id = ?').get(Number(b.projectId));
   if (!project) throw new HttpError(400, 'Elige el proyecto de esta publicacion');
   if (project.user_id !== me.id) throw new HttpError(403, 'Solo puedes publicar en tus proyectos');
-  const image = saveImage(b.image);
-  const info = db.prepare('INSERT INTO posts (user_id, project_id, title, text, image, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(me.id, project.id, title, text, image, Date.now());
-  send(res, 200, { post: getPost(Number(info.lastInsertRowid), me) });
+  const media = Array.isArray(b.media) ? b.media : [];
+  if (!media.length) throw new HttpError(400, 'Anade al menos una foto o un video');
+  if (media.length > MAX_MEDIA_PER_POST) throw new HttpError(400, `Maximo ${MAX_MEDIA_PER_POST} fotos o videos por publicacion`);
+  const clean = media.map(m => {
+    const kind = m && m.kind === 'video' ? 'video' : 'image';
+    if (!ownUpload(m && m.url, me, kind)) throw new HttpError(400, 'Algun archivo no se ha subido bien. Vuelve a intentarlo.');
+    const poster = kind === 'video' && m.poster && ownUpload(m.poster, me, 'image') ? m.poster : null;
+    const dim = v => (Number.isInteger(v) && v > 0 && v < 20000 ? v : null);
+    return { kind, url: m.url, poster, width: dim(m.width), height: dim(m.height) };
+  });
+  const urls = clean.flatMap(m => [m.url, m.poster]).filter(Boolean);
+  if (new Set(urls).size !== urls.length) throw new HttpError(400, 'Hay archivos repetidos en la publicacion');
+  const cover = clean[0].kind === 'image' ? clean[0].url : clean[0].poster;
+  db.exec('BEGIN');
+  try {
+    const info = db.prepare('INSERT INTO posts (user_id, project_id, title, text, image, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(me.id, project.id, title, text, cover, Date.now());
+    const postId = Number(info.lastInsertRowid);
+    clean.forEach((m, i) => db.prepare('INSERT INTO post_media (post_id, position, kind, url, poster, width, height) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(postId, i, m.kind, m.url, m.poster, m.width, m.height));
+    db.exec('COMMIT');
+    send(res, 200, { post: getPost(postId, me) });
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
 });
+
+function postFiles(where, ...args) {
+  const files = new Set();
+  for (const r of db.prepare(`SELECT p.image FROM posts p WHERE ${where} AND p.image IS NOT NULL`).all(...args)) files.add(r.image);
+  for (const r of db.prepare(`SELECT m.url, m.poster FROM post_media m JOIN posts p ON p.id = m.post_id WHERE ${where}`).all(...args)) {
+    files.add(r.url); if (r.poster) files.add(r.poster);
+  }
+  return [...files];
+}
+function removeUploads(list) {
+  for (const u of list) {
+    fs.rm(path.join(UPLOADS, path.basename(u)), () => {});
+    db.prepare('DELETE FROM media_uploads WHERE url = ?').run(u);
+  }
+}
 
 route('DELETE', '/api/posts/(\\d+)', async (req, res, url, [id]) => {
   const me = requireUser(req);
   const p = db.prepare('SELECT user_id, image FROM posts WHERE id = ?').get(Number(id));
   if (!p) throw new HttpError(404, 'Publicacion no encontrada');
   if (p.user_id !== me.id) throw new HttpError(403, 'Solo puedes borrar tus publicaciones');
+  const files = postFiles('p.id = ?', Number(id));
   db.prepare('DELETE FROM posts WHERE id = ?').run(Number(id));
-  if (p.image) fs.rm(path.join(UPLOADS, path.basename(p.image)), () => {});
+  removeUploads(files);
   send(res, 200, { ok: true });
 });
 
@@ -355,7 +472,7 @@ route('GET', '/api/users/([A-Za-z0-9_]+)', async (req, res, url, [username]) => 
       followers: c('SELECT COUNT(*) AS n FROM follows WHERE followee_id = ?'),
       followingCount: c('SELECT COUNT(*) AS n FROM follows WHERE follower_id = ?'),
       postCount: c('SELECT COUNT(*) AS n FROM posts WHERE user_id = ?') },
-    posts: posts.map(r => mapPost(r, me)),
+    posts: mapPosts(posts, me),
   });
 });
 
@@ -434,16 +551,16 @@ route('GET', '/api/projects/(\\d+)/posts', async (req, res, url, [id]) => {
   const p = projectById(id);
   const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
   const rows = db.prepare(POST_SELECT + ' WHERE p.id < ? AND p.project_id = ? ORDER BY p.id DESC LIMIT 20').all(before, p.id);
-  send(res, 200, { posts: rows.map(r => mapPost(r, me)) });
+  send(res, 200, { posts: mapPosts(rows, me) });
 });
 
 route('DELETE', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
   const me = requireUser(req);
   const p = ownProject(id, me);
-  const images = db.prepare('SELECT image FROM posts WHERE project_id = ? AND image IS NOT NULL').all(p.id).map(r => r.image);
+  const images = postFiles('p.project_id = ?', p.id);
   const stored = db.prepare('SELECT stored FROM project_files WHERE project_id = ?').all(p.id).map(r => r.stored);
   db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
-  for (const img of images) fs.rm(path.join(UPLOADS, path.basename(img)), () => {});
+  removeUploads(images);
   for (const f of stored) fs.rm(path.join(FILES, f), () => {});
   send(res, 200, { ok: true });
 });
@@ -572,6 +689,31 @@ function serveFile(res, baseDir, rel) {
   });
 }
 
+const UPLOAD_TYPES = { '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime' };
+function serveUpload(req, res, rel) {
+  const name = path.basename(rel);
+  const type = UPLOAD_TYPES[path.extname(name).toLowerCase()];
+  const file = path.join(UPLOADS, name);
+  if (!type || name.startsWith('tmp-')) { res.writeHead(404); return res.end(); }
+  fs.stat(file, (err, st) => {
+    if (err) { res.writeHead(404); return res.end('No encontrado'); }
+    const headers = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=86400' };
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    if (m && (m[1] || m[2])) {
+      let start = m[1] ? Number(m[1]) : st.size - Number(m[2]);
+      let end = m[1] && m[2] ? Number(m[2]) : st.size - 1;
+      if (start >= st.size || start < 0 || end < start) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
+      end = Math.min(end, st.size - 1);
+      res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
+      return fs.createReadStream(file, { start, end }).pipe(res);
+    }
+    res.writeHead(200, { ...headers, 'Content-Length': st.size });
+    fs.createReadStream(file).pipe(res);
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = decodeURIComponent(url.pathname);
@@ -583,7 +725,7 @@ const server = http.createServer(async (req, res) => {
       }
       throw new HttpError(404, 'Ruta no encontrada');
     }
-    if (p.startsWith('/uploads/')) return serveFile(res, UPLOADS, p.slice('/uploads/'.length));
+    if (p.startsWith('/uploads/')) return serveUpload(req, res, p.slice('/uploads/'.length));
     return serveFile(res, PUBLIC, p === '/' ? 'index.html' : p.slice(1));
   } catch (e) {
     if (!(e instanceof HttpError)) console.error(e);
