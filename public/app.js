@@ -343,10 +343,17 @@ function masonry(loader, emptyMsg) {
   }
   const io = new IntersectionObserver(es => { if (es[0].isIntersecting) load(); }, { rootMargin: '800px' });
   io.observe(sentinel);
+  // No dependemos solo del observador: arrancamos la primera carga en cuanto la cuadrícula está en pantalla
+  // y comprobamos también al hacer scroll.
+  const nearEnd = () => sentinel.isConnected && sentinel.getBoundingClientRect().top < innerHeight + 800;
+  const kick = () => { if (!alive) return; if (!ctl.el.isConnected) return setTimeout(kick, 30); if (!tiles.length || nearEnd()) load(); };
+  setTimeout(kick, 0);
+  const onScroll = () => { if (nearEnd()) load(); };
+  addEventListener('scroll', onScroll, { passive: true });
   let rt;
   const onResize = () => { clearTimeout(rt); rt = setTimeout(() => relayout(), 120); };
   addEventListener('resize', onResize);
-  cleanup.push(() => { alive = false; io.disconnect(); removeEventListener('resize', onResize); });
+  cleanup.push(() => { alive = false; io.disconnect(); removeEventListener('resize', onResize); removeEventListener('scroll', onScroll); });
   return ctl;
 }
 
