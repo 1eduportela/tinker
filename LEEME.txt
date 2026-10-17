@@ -1,0 +1,24 @@
+TINKER
+=============
+
+ARRANCAR
+1. Instala Node.js (version LTS) desde https://nodejs.org  (solo la primera vez)
+2. Doble clic en "Iniciar red social.bat"
+3. Se abre el navegador en http://localhost:3000
+   La ventana negra muestra el CODIGO DE INVITACION que necesitan tus amigos para registrarse.
+   Si cierras esa ventana, Tinker se apaga.
+
+LA PRIMERA VEZ, Windows puede preguntar si Node.js puede usar la red: marca "Redes privadas" y acepta.
+
+QUE TUS AMIGOS ENTREN
+- Si estan en tu misma wifi: que abran la direccion "Desde otra maquina" que sale en la ventana
+  (algo como http://192.168.1.X:3000).
+- Si estan en sus casas: la forma mas sencilla y segura es Tailscale (gratis, https://tailscale.com).
+  Tu y cada amigo lo instalais e iniciais sesion; tu les invitas a tu red ("Share" en el panel de Tailscale)
+  y entran con http://<IP de Tailscale de tu PC>:3000. Asi no hay que abrir puertos en el router.
+- Tu PC tiene que estar encendido con la ventana abierta para que la red funcione.
+
+DATOS
+- Todo se guarda en la carpeta "data": la base de datos (red.db), las fotos (uploads) y el codigo (config.json).
+- Para hacer copia de seguridad, copia la carpeta "data" con la red apagada.
+- Para cambiar el codigo de invitacion, edita data/config.json y reinicia.
