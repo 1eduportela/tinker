@@ -31,6 +31,8 @@ const ICONS = {
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
   key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/><path d="M15.5 7.5l3 3L22 7l-3-3"/>',
   monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
+  mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
 };
 function icon(name) {
@@ -609,6 +611,7 @@ async function peoplePage() {
   paintSeg(); paint();
   shell.context.replaceChildren(
     ...ctxSection('Personas', 'Sigue a gente para ver sus proyectos en tu inicio.'),
+    ctxButton('mail', 'Invitar a alguien', openInvites, true),
     h('div', { class: 'ctx-search' }, icon('search'), search), seg);
   shell.content.replaceChildren(pageTitle('Personas'), list);
 }
@@ -690,6 +693,50 @@ async function openSecurity() {
   paint();
 }
 
+// =============== Invitaciones ===============
+async function copyText(text, input) {
+  try { await navigator.clipboard.writeText(text); toast('Copiado'); }
+  catch { if (input) { input.select(); document.execCommand && document.execCommand('copy'); toast('Selecciónalo y cópialo con Ctrl+C'); } }
+}
+async function openInvites() {
+  const box = h('div', {}, h('div', { class: 'muted' }, 'Cargando…'));
+  const created = h('div');
+  const m = modal(h('div', {},
+    h('h2', {}, 'Invitar a alguien'),
+    h('p', { class: 'muted' }, `Cada invitación sirve para una sola persona y caduca en 7 días. Así, si un código se filtra, no puede usarlo nadie más. Puedes tener hasta 5 sin usar.`),
+    created, box));
+  async function paint() {
+    let data; try { data = await api('GET', '/api/invites'); } catch (e) { return box.replaceChildren(h('div', { class: 'error' }, e.message)); }
+    const btn = h('button', { class: 'btn' }, icon('plus'), ' Crear invitación');
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        const r = await api('POST', '/api/invites');
+        const inp = h('input', { type: 'text', value: r.code, readonly: true, class: 'invite-code', onfocus: e => e.target.select() });
+        created.replaceChildren(h('div', { class: 'invite-new' },
+          h('div', { class: 'muted', style: 'font-size:13px' }, 'Pásale este código. Solo se muestra ahora:'),
+          h('div', { class: 'row', style: 'margin-top:6px' }, inp, h('button', { class: 'btn ghost', onclick: () => copyText(r.code, inp) }, icon('copy'), ' Copiar')),
+          h('small', { class: 'muted' }, `Caduca el ${new Date(r.expiresAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}`)));
+        paint();
+      } catch (e) { toast(e.message); btn.disabled = false; }
+    };
+    const label = { pending: 'Pendiente', used: 'Usada', expired: 'Caducada' };
+    box.replaceChildren(
+      h('div', { class: 'row', style: 'margin:6px 0 14px' }, h('div', { class: 'spacer' }), btn),
+      data.invites.length ? h('div', { class: 'sessions' }, ...data.invites.map(x => h('div', { class: 'session' },
+        h('span', { class: 'ficon' }, icon('mail')),
+        h('div', { class: 'session-txt' },
+          h('b', {}, `TNK-····-··${x.hint}`, h('span', { class: 'tag ' + x.status }, label[x.status])),
+          h('small', { class: 'muted' }, x.status === 'used' ? `La usó @${x.usedBy || 'cuenta borrada'}` :
+            x.status === 'pending' ? `Caduca el ${new Date(x.expiresAt).toLocaleDateString('es-ES')}` : `Caducó el ${new Date(x.expiresAt).toLocaleDateString('es-ES')}`)),
+        x.status === 'pending' && h('button', { class: 'btn ghost small', onclick: async () => {
+          try { await api('DELETE', `/api/invites/${x.id}`); toast('Invitación anulada'); paint(); } catch (e) { toast(e.message); }
+        } }, 'Anular'))))
+        : h('div', { class: 'muted' }, 'Aún no has creado ninguna invitación.'));
+  }
+  paint();
+}
+
 // =============== Perfil ===============
 const SECTIONS = [
   { key: 'bienvenida', label: 'Bienvenida', ic: 'user' },
@@ -726,6 +773,7 @@ async function profilePage(username, section) {
         h('h1', {}, user.displayName),
         h('div', { class: 'handle' }, '@' + user.username),
         user.bio && h('div', { class: 'banner-bio' }, user.bio),
+        user.invitedBy && h('div', { class: 'banner-inv' }, 'Invitado por ', h('a', { href: `#/u/${user.invitedBy}` }, '@' + user.invitedBy)),
         h('div', { class: 'banner-stats' },
           h('span', {}, h('b', {}, user.postCount), ' publicaciones'),
           h('span', {}, followersEl, ' seguidores'),
@@ -1272,7 +1320,7 @@ function authView() {
     username: h('input', { type: 'text', autocomplete: 'username', maxlength: 20 }),
     displayName: h('input', { type: 'text', maxlength: 40 }),
     password: h('input', { type: 'password', autocomplete: 'current-password', maxlength: 200 }),
-    invite: h('input', { type: 'text' }),
+    invite: h('input', { type: 'text', placeholder: 'TNK-XXXX-XXXX', autocomplete: 'off', spellcheck: false }),
   };
   const extra = h('div', {}, h('label', {}, 'Nombre visible'), fields.displayName,
     h('label', {}, 'Código de invitación'), fields.invite);

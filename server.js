@@ -133,10 +133,21 @@ if (db.prepare('PRAGMA table_info(sessions)').all().some(c => c.name === 'token'
   db.exec('DROP TABLE sessions; ALTER TABLE sessions_new RENAME TO sessions; COMMIT');
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
+db.exec(`CREATE TABLE IF NOT EXISTS invites (
+  id INTEGER PRIMARY KEY,
+  code_hash TEXT UNIQUE NOT NULL,
+  hint TEXT NOT NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  used_at INTEGER
+)`);
 // Columnas nuevas en bases de datos ya existentes
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!userCols.includes('banner')) db.exec('ALTER TABLE users ADD COLUMN banner TEXT');
 if (!userCols.includes('about')) db.exec("ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''");
+if (!userCols.includes('invited_by')) db.exec('ALTER TABLE users ADD COLUMN invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL');
 if (!userCols.includes('pass_params')) db.exec("ALTER TABLE users ADD COLUMN pass_params TEXT NOT NULL DEFAULT 'scrypt:16384:8:1'");
 const projectCols = db.prepare('PRAGMA table_info(projects)').all().map(c => c.name);
 if (!projectCols.includes('readme')) db.exec("ALTER TABLE projects ADD COLUMN readme TEXT NOT NULL DEFAULT ''");
@@ -398,6 +409,23 @@ function securityLog(event, req, detail = '') {
   } catch {}
 }
 
+// ---------- Invitaciones ----------
+// Codigos de un solo uso tipo TNK-ABCD-EF23 (40 bits aleatorios). En la base de datos solo se guarda su huella.
+const INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const INVITE_DAYS = 7, MAX_PENDING_INVITES = 5;
+function newInviteCode() {
+  const bytes = crypto.randomBytes(8);
+  let c = ''; for (let i = 0; i < 8; i++) c += INVITE_ALPHABET[bytes[i] % 32];
+  return `TNK-${c.slice(0, 4)}-${c.slice(4)}`;
+}
+const normCode = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^TNK/, '');
+// El codigo maestro (el que sale en la ventana negra) tambien es de un solo uso: tras usarse se genera otro
+if (!/^TNK-/.test(config.inviteCode)) { config.inviteCode = newInviteCode(); saveConfig(); }
+function rotateMasterCode() {
+  config.inviteCode = newInviteCode(); saveConfig();
+  console.log(`\n  Se ha usado el codigo de invitacion maestro. El nuevo es: ${config.inviteCode}\n`);
+}
+
 // ---------- API ----------
 const routes = [];
 const route = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' + pattern + '$'), fn });
@@ -409,19 +437,35 @@ route('POST', '/api/register', async (req, res) => {
   const username = str(b.username, 20, 'El usuario');
   const displayName = str(b.displayName, 40, 'El nombre') || username;
   const password = typeof b.password === 'string' ? b.password : '';
-  if (str(b.invite, 50, 'El codigo') !== config.inviteCode) {
+  const code = normCode(str(b.invite, 50, 'El codigo'));
+  const isMaster = code.length >= 8 && code === normCode(config.inviteCode);
+  const invite = !isMaster && code ? db.prepare('SELECT * FROM invites WHERE code_hash = ?').get(sha256(code)) : null;
+  if (!isMaster && (!invite || invite.used_by || invite.used_at || invite.expires_at < Date.now())) {
     securityLog('invitacion_incorrecta', req, username);
     limit('badinvite:' + ip, 5, HOUR, 'Demasiados codigos de invitacion incorrectos');
-    throw new HttpError(403, 'Codigo de invitacion incorrecto');
+    throw new HttpError(403, invite ? (invite.used_at ? 'Esa invitacion ya se ha usado' : 'Esa invitacion ha caducado') : 'Codigo de invitacion incorrecto');
   }
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) throw new HttpError(400, 'El usuario debe tener 3-20 letras, numeros o _');
   const weak = passwordProblem(password, username);
   if (weak) throw new HttpError(400, weak);
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) throw new HttpError(409, 'Ese usuario ya existe');
   const salt = crypto.randomBytes(16).toString('hex');
-  const info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, pass_params, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(username, displayName, await hashPasswordAsync(password, salt), salt, PASS_PARAMS, Date.now());
-  securityLog('registro', req, username);
+  const hash = await hashPasswordAsync(password, salt);
+  db.exec('BEGIN');
+  let info;
+  try {
+    // La invitacion se marca como usada en la misma operacion: nunca puede usarse dos veces
+    if (invite) {
+      const u2 = db.prepare('UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL').run(Date.now(), invite.id);
+      if (!u2.changes) throw new HttpError(403, 'Esa invitacion ya se ha usado');
+    }
+    info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, pass_params, invited_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(username, displayName, hash, salt, PASS_PARAMS, invite ? invite.created_by : null, Date.now());
+    if (invite) db.prepare('UPDATE invites SET used_by = ? WHERE id = ?').run(Number(info.lastInsertRowid), invite.id);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  if (isMaster) rotateMasterCode();
+  securityLog('registro', req, `${username} (${isMaster ? 'codigo maestro' : 'invitacion ' + invite.hint})`);
   return login(req, res, Number(info.lastInsertRowid));
 });
 
@@ -574,6 +618,36 @@ route('DELETE', '/api/me', async (req, res) => {
   send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '', 0) });
 });
 
+route('GET', '/api/invites', async (req, res) => {
+  const me = requireUser(req);
+  const now = Date.now();
+  const rows = db.prepare(`SELECT i.*, u.username AS used_name FROM invites i LEFT JOIN users u ON u.id = i.used_by
+    WHERE i.created_by = ? ORDER BY i.id DESC LIMIT 50`).all(me.id);
+  send(res, 200, { invites: rows.map(r => ({ id: r.id, hint: r.hint, createdAt: r.created_at, expiresAt: r.expires_at,
+    status: r.used_at ? 'used' : r.expires_at < now ? 'expired' : 'pending', usedBy: r.used_name || null })) });
+});
+
+route('POST', '/api/invites', async (req, res) => {
+  const me = requireUser(req);
+  limit('invite:' + me.id, 10, DAY, 'Has creado demasiadas invitaciones hoy');
+  const now = Date.now();
+  const pending = db.prepare('SELECT COUNT(*) AS n FROM invites WHERE created_by = ? AND used_at IS NULL AND expires_at > ?').get(me.id, now).n;
+  if (pending >= MAX_PENDING_INVITES) throw new HttpError(400, `Ya tienes ${MAX_PENDING_INVITES} invitaciones sin usar. Espera a que se usen o anula alguna.`);
+  const code = newInviteCode();
+  const expiresAt = now + INVITE_DAYS * DAY;
+  db.prepare('INSERT INTO invites (code_hash, hint, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?)')
+    .run(sha256(normCode(code)), code.slice(-2), me.id, now, expiresAt);
+  securityLog('invitacion_creada', req, me.username);
+  send(res, 200, { code, expiresAt });
+});
+
+route('DELETE', '/api/invites/(\\d+)', async (req, res, url, [id]) => {
+  const me = requireUser(req);
+  const r = db.prepare('DELETE FROM invites WHERE id = ? AND created_by = ? AND used_at IS NULL').run(Number(id), me.id);
+  if (!r.changes) throw new HttpError(404, 'Invitacion no encontrada');
+  send(res, 200, { ok: true });
+});
+
 route('GET', '/api/feed', async (req, res, url) => {
   const me = requireUser(req);
   const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
@@ -717,6 +791,7 @@ route('GET', '/api/users/([A-Za-z0-9_]+)', async (req, res, url, [username]) => 
   const c = (sql) => db.prepare(sql).get(u.id).n;
   send(res, 200, {
     user: { ...publicUser(u), createdAt: u.created_at, isMe: u.id === me.id,
+      invitedBy: u.invited_by ? (db.prepare('SELECT username FROM users WHERE id = ?').get(u.invited_by) || {}).username || null : null,
       following: !!db.prepare('SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?').get(me.id, u.id),
       followers: c('SELECT COUNT(*) AS n FROM follows WHERE followee_id = ?'),
       followingCount: c('SELECT COUNT(*) AS n FROM follows WHERE follower_id = ?'),
@@ -1066,7 +1141,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('\n  Tinker esta en marcha');
   console.log(`  - En este PC:        http://localhost:${PORT}`);
   ips.forEach(ip => console.log(`  - Desde otra maquina: http://${ip}:${PORT}`));
-  console.log(`\n  Codigo de invitacion para registrarse: ${config.inviteCode}`);
+  console.log(`\n  Codigo de invitacion maestro (un solo uso): ${config.inviteCode}`);
+  console.log('  Para invitar a mas gente: en Tinker, Personas > "Invitar a alguien".');
   console.log('  (Cierra esta ventana para apagar Tinker)\n');
   if (process.platform === 'win32' && !process.env.NO_OPEN) exec(`start "" http://localhost:${PORT}`);
 });
