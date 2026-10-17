@@ -28,7 +28,17 @@ async function startServer(env = {}) {
   if (!out.includes('en marcha')) throw new Error('El servidor no arranca:\n' + out);
   const base = `http://127.0.0.1:${port}`;
   const master = () => JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).inviteCode;
-  return { base, dir, proc, master, log: () => out, stop: () => { proc.kill(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  // Parar: esperar a que el proceso cierre la base de datos antes de borrar la carpeta
+  // (en Windows no se puede borrar un archivo abierto). Si aun así no se puede, se deja: es una carpeta temporal.
+  async function stop() {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      const exited = new Promise(r => proc.once('exit', r));
+      proc.kill();
+      await Promise.race([exited, new Promise(r => setTimeout(r, 5000))]);
+    }
+    try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch {}
+  }
+  return { base, dir, proc, master, log: () => out, stop };
 }
 
 // Cliente con su propia cookie de sesión
@@ -64,7 +74,7 @@ test.before(async () => {
   alice = await register(srv, 'alice_t');
   bob = await register(srv, 'bob_t');
 });
-test.after(() => srv && srv.stop());
+test.after(async () => { if (srv) await srv.stop(); });
 
 // ------------------------------------------------------------------ pruebas
 test('una dirección mal formada no tumba el servidor', async () => {
@@ -108,7 +118,7 @@ test('registro: más de 10 por hora desde la misma conexión se bloquean', async
     const codes = [];
     for (let i = 0; i < 11; i++) codes.push((await client(q.base).call('POST', '/api/register', { username: 'r' + i + '_t', password: PW, invite: q.master() })).status);
     assert.equal(codes[10], 429);
-  } finally { q.stop(); }
+  } finally { await q.stop(); }
 });
 
 test('la primera cuenta de una instalación nueva es administradora', async () => {
@@ -257,5 +267,5 @@ test('cuotas de espacio: no se puede llenar el disco', async () => {
     for (let i = 0; i < 4; i++) codes.push((await u.call('POST', '/api/media?kind=image', big)).status);
     assert.deepEqual(codes.slice(0, 2), [200, 200]);
     assert.equal(codes[3], 413);
-  } finally { q.stop(); }
+  } finally { await q.stop(); }
 });
