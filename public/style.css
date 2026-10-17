@@ -201,6 +201,56 @@ a.folder { color: inherit; }
 .proj-stats span { display: inline-flex; align-items: center; gap: 6px; }
 .proj-stats .ic { width: 15px; height: 15px; }
 
+/* Archivos */
+.files { background: var(--panel); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; transition: box-shadow .15s; }
+.files.over { box-shadow: 0 0 0 3px var(--accent); }
+.files-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; font-weight: 700; }
+.crumb { background: none; border: 0; padding: 4px 6px; border-radius: 8px; cursor: pointer; font-weight: 700; }
+.crumb:hover { background: var(--field); }
+.crumbs .slash { color: var(--muted); }
+.files-count { font-size: 13px; }
+.btn.small { padding: 7px 12px; font-size: 13.5px; display: inline-flex; align-items: center; gap: 6px; }
+.btn.small .ic { width: 16px; height: 16px; }
+.files-list { display: flex; flex-direction: column; }
+.frow { display: grid; grid-template-columns: minmax(0, 1fr) 110px 110px 76px; align-items: center; gap: 10px; padding: 0 14px 0 18px;
+  min-height: 46px; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; cursor: pointer; width: 100%; }
+.frow:last-child { border-bottom: 0; }
+.frow:hover { background: var(--field); }
+.frow.up { grid-template-columns: 1fr; }
+.fname { display: flex; align-items: center; gap: 10px; min-width: 0; font-weight: 500; }
+.ftxt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frow.dir .ftxt { font-weight: 700; }
+.ficon { display: inline-flex; color: var(--muted); }
+.ficon .ic { width: 18px; height: 18px; }
+.frow.dir .ficon { color: #c9a800; }
+.fmeta, .fdate { font-size: 13px; white-space: nowrap; }
+.factions { display: flex; justify-content: flex-end; gap: 2px; opacity: .55; }
+.frow:hover .factions { opacity: 1; }
+.factions .icon-btn .ic { width: 17px; height: 17px; }
+.files-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 56px 20px; }
+.files-empty .ic { width: 36px; height: 36px; color: var(--muted); margin-bottom: 4px; }
+.files-empty.can-drop { cursor: pointer; margin: 14px; border: 2px dashed var(--line); border-radius: 14px; }
+.files-empty.can-drop:hover { border-color: var(--ink); }
+.upload-bar { padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--field); }
+.upload-txt { font-size: 13px; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.upload-track { height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.upload-fill { height: 100%; background: #111; transition: width .15s; }
+.modal.viewer-modal { max-width: 980px; }
+.viewer-head { display: flex; align-items: center; gap: 10px; padding-right: 40px; margin-bottom: 14px; overflow-wrap: anywhere; }
+.viewer-body { max-height: calc(100vh - 220px); overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+.viewer-body img, .viewer-body video { display: block; max-width: 100%; margin: 0 auto; }
+.viewer-body .pdf { width: 100%; height: calc(100vh - 240px); border: 0; display: block; }
+.viewer-body .md { padding-top: 10px; }
+pre.code { margin: 0; padding: 12px 0; font: 13px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace; counter-reset: ln; }
+pre.code .ln { display: block; padding-right: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre.code .ln i { display: inline-block; width: 48px; padding-right: 14px; text-align: right; color: var(--muted); font-style: normal; user-select: none; }
+.viewer-none { text-align: center; padding: 50px 20px; }
+.viewer-none .ic { width: 42px; height: 42px; color: var(--muted); }
+.viewer-none p { margin: 6px 0 0; }
+a.btn { display: inline-flex; align-items: center; gap: 6px; }
+a.btn .ic { width: 17px; height: 17px; }
+
 /* README */
 .readme { background: var(--panel); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; }
 .readme-head { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
@@ -320,6 +370,9 @@ a.folder { color: inherit; }
   .proj-head { padding: 18px; gap: 12px; }
   .proj-icon { width: 42px; height: 42px; }
   .proj-path { font-size: 19px; }
+  .frow { grid-template-columns: minmax(0, 1fr) 70px 64px; }
+  .fdate { display: none; }
+  .files-count { display: none; }
   .banner-info { padding: 18px; gap: 14px; }
   .banner-info .avatar.big { width: 72px; height: 72px; font-size: 28px; }
   .banner-info h1 { font-size: 22px; }

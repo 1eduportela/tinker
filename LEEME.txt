@@ -19,6 +19,7 @@ QUE TUS AMIGOS ENTREN
 - Tu PC tiene que estar encendido con la ventana abierta para que la red funcione.
 
 DATOS
-- Todo se guarda en la carpeta "data": la base de datos (red.db), las fotos (uploads) y el codigo (config.json).
+- Todo se guarda en la carpeta "data": la base de datos (red.db), las fotos (uploads),
+  los archivos de los proyectos (files) y el codigo de invitacion (config.json).
 - Para hacer copia de seguridad, copia la carpeta "data" con la red apagada.
 - Para cambiar el codigo de invitacion, edita data/config.json y reinicia.

@@ -18,6 +18,9 @@ const ICONS = {
   trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
   book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   chevron: '<polyline points="6 9 12 15 18 9"/>',
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
@@ -574,6 +577,7 @@ async function projectsView(user) {
 
 // =============== Proyecto ===============
 const PROJECT_SECTIONS = [
+  { key: 'archivos', label: 'Archivos', ic: 'file' },
   { key: 'readme', label: 'README', ic: 'book' },
   { key: 'multimedia', label: 'Multimedia', ic: 'image' },
 ];
@@ -624,6 +628,198 @@ function markdown(src) {
   }
   flushPara(); flushList();
   return out;
+}
+
+// =============== Archivos del proyecto (estilo GitHub) ===============
+const TEXT_EXT = new Set(['txt', 'md', 'markdown', 'csv', 'json', 'xml', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'conf', 'log',
+  'c', 'h', 'cpp', 'hpp', 'cc', 'ino', 'py', 'js', 'ts', 'jsx', 'tsx', 'html', 'css', 'scss', 'java', 'kt', 'cs', 'go', 'rs',
+  'rb', 'php', 'sh', 'bat', 'ps1', 'sql', 'm', 'r', 'lua', 'v', 'vhd', 'vhdl', 'gcode', 'nc', 'scad', 'tex', 'svg']);
+const IMG_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+const extOf = name => (name.includes('.') ? name.split('.').pop().toLowerCase() : '');
+function fmtSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Recorre carpetas soltadas con arrastrar y soltar
+async function filesFromDrop(dt) {
+  const out = [];
+  const items = [...(dt.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (!items.length) return [...dt.files].map(f => ({ file: f, path: f.name }));
+  const walk = async (entry, prefix) => {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      out.push({ file, path: prefix + entry.name });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      let batch;
+      do {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        for (const e of batch) await walk(e, prefix + entry.name + '/');
+      } while (batch.length);
+    }
+  };
+  for (const e of items) await walk(e, '');
+  return out;
+}
+
+function uploadOne(projectId, path, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/projects/${projectId}/files?path=${encodeURIComponent(path)}`);
+    xhr.upload.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onload = () => {
+      let data = {}; try { data = JSON.parse(xhr.responseText); } catch {}
+      xhr.status < 300 ? resolve(data.file) : reject(new Error(data.error || 'No se pudo subir'));
+    };
+    xhr.onerror = () => reject(new Error('Se cortó la conexión'));
+    xhr.send(file);
+  });
+}
+
+function openFileViewer(f) {
+  const name = f.path.split('/').pop();
+  const ext = extOf(name);
+  const body = h('div', { class: 'viewer-body' });
+  const dl = h('a', { class: 'btn', href: `/api/files/${f.id}?as=download` }, icon('download'), ' Descargar');
+  modal(h('div', { class: 'viewer' },
+    h('div', { class: 'viewer-head' }, icon('file'), h('b', {}, f.path), h('span', { class: 'muted' }, fmtSize(f.size))),
+    body, h('div', { class: 'row', style: 'margin-top:14px' }, h('span', { class: 'spacer' }), dl)), 'viewer-modal');
+  if (IMG_EXT.has(ext)) body.append(h('img', { src: `/api/files/${f.id}`, alt: name }));
+  else if (TEXT_EXT.has(ext) && f.size <= 1024 * 1024) {
+    body.append(h('div', { class: 'muted' }, 'Cargando…'));
+    fetch(`/api/files/${f.id}?as=text`).then(r => r.text()).then(t => {
+      if (ext === 'md' || ext === 'markdown') { const md = h('div', { class: 'md' }); md.innerHTML = markdown(t); body.replaceChildren(md); }
+      else {
+        const lines = t.split('\n');
+        body.replaceChildren(h('pre', { class: 'code' }, h('code', {}, ...lines.map((l, i) =>
+          h('span', { class: 'ln' }, h('i', {}, i + 1), l + (i < lines.length - 1 ? '\n' : ''))))));
+      }
+    }).catch(() => body.replaceChildren(h('div', { class: 'muted' }, 'No se pudo abrir el archivo.')));
+  } else if (ext === 'pdf') {
+    body.append(h('iframe', { class: 'pdf', src: `/api/files/${f.id}`, title: name }));
+  } else if (['mp4', 'webm'].includes(ext)) {
+    body.append(h('video', { src: `/api/files/${f.id}`, controls: true }));
+  } else {
+    body.append(h('div', { class: 'viewer-none' }, icon('file'),
+      h('p', {}, 'Este tipo de archivo no se puede ver aquí.'), h('p', { class: 'muted' }, 'Descárgalo para abrirlo con tu programa.')));
+  }
+}
+
+async function filesView(project, autoUpload, onCount) {
+  let files = (await api('GET', `/api/projects/${project.id}/files`)).files;
+  let cwd = '';
+  const box = h('section', { class: 'files' });
+  const progress = h('div', { class: 'upload-bar', hidden: true });
+  const pickFiles = h('input', { type: 'file', multiple: true, hidden: true });
+  const pickFolder = h('input', { type: 'file', multiple: true, webkitdirectory: true, hidden: true });
+
+  async function upload(list) {
+    list = list.filter(x => x.file.size > 0 || x.file.type !== '');
+    const big = list.filter(x => x.file.size > 50 * 1024 * 1024);
+    if (big.length) toast(`${big.length} archivo(s) pasan de 50 MB y no se subirán`);
+    list = list.filter(x => x.file.size <= 50 * 1024 * 1024);
+    if (!list.length) return;
+    progress.hidden = false;
+    let done = 0, failed = 0;
+    for (const x of list) {
+      const target = cwd + x.path;
+      const paintBar = frac => progress.replaceChildren(
+        h('div', { class: 'upload-txt' }, `Subiendo ${done + 1} de ${list.length}: ${target}`),
+        h('div', { class: 'upload-track' }, h('div', { class: 'upload-fill', style: `width:${Math.round(((done + frac) / list.length) * 100)}%` })));
+      paintBar(0);
+      try {
+        const f = await uploadOne(project.id, target, x.file, paintBar);
+        files = files.filter(o => o.path !== f.path).concat(f);
+      } catch (e) { failed++; toast(`${x.path}: ${e.message}`); }
+      done++;
+    }
+    progress.hidden = true;
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    paint();
+    if (!failed) toast(list.length === 1 ? 'Archivo subido' : `${list.length} archivos subidos`);
+  }
+  pickFiles.onchange = () => { upload([...pickFiles.files].map(f => ({ file: f, path: f.name }))); pickFiles.value = ''; };
+  pickFolder.onchange = () => { upload([...pickFolder.files].map(f => ({ file: f, path: f.webkitRelativePath || f.name }))); pickFolder.value = ''; };
+
+  async function remove(entry) {
+    const label = entry.dir ? `la carpeta "${entry.name}" y todo lo que contiene` : `"${entry.name}"`;
+    if (!confirm(`¿Borrar ${label}?`)) return;
+    const q = entry.dir ? `folder=${encodeURIComponent(cwd + entry.name)}` : `path=${encodeURIComponent(entry.path)}`;
+    try {
+      await api('DELETE', `/api/projects/${project.id}/files?${q}`);
+      files = entry.dir ? files.filter(f => !f.path.startsWith(cwd + entry.name + '/')) : files.filter(f => f.path !== entry.path);
+      paint(); toast('Borrado');
+    } catch (e) { toast(e.message); }
+  }
+
+  function entries() {
+    const dirs = new Map(), list = [];
+    for (const f of files) {
+      if (!f.path.startsWith(cwd)) continue;
+      const rest = f.path.slice(cwd.length);
+      const slash = rest.indexOf('/');
+      if (slash >= 0) {
+        const name = rest.slice(0, slash);
+        const d = dirs.get(name) || { dir: true, name, size: 0, count: 0, createdAt: 0 };
+        d.size += f.size; d.count++; d.createdAt = Math.max(d.createdAt, f.createdAt);
+        dirs.set(name, d);
+      } else list.push({ ...f, name: rest });
+    }
+    const byName = (a, b) => a.name.localeCompare(b.name, 'es', { numeric: true });
+    return [...[...dirs.values()].sort(byName), ...list.sort(byName)];
+  }
+
+  function paint() {
+    if (cwd && !files.some(f => f.path.startsWith(cwd))) cwd = '';
+    const parts = cwd ? cwd.slice(0, -1).split('/') : [];
+    const crumbs = h('div', { class: 'crumbs' },
+      h('button', { class: 'crumb', onclick: () => { cwd = ''; paint(); } }, project.name),
+      ...parts.flatMap((part, i) => [h('span', { class: 'slash' }, '/'),
+        h('button', { class: 'crumb', onclick: () => { cwd = parts.slice(0, i + 1).join('/') + '/'; paint(); } }, part)]));
+    const total = files.reduce((n, f) => n + f.size, 0);
+    const head = h('div', { class: 'files-head' }, crumbs, h('span', { class: 'spacer' }),
+      h('span', { class: 'muted files-count' }, `${files.length} archivo${files.length === 1 ? '' : 's'} · ${fmtSize(total)}`),
+      project.mine && h('button', { class: 'btn ghost small', onclick: () => pickFolder.click() }, icon('folder'), 'Subir carpeta'),
+      project.mine && h('button', { class: 'btn small', onclick: () => pickFiles.click() }, icon('upload'), 'Subir archivos'));
+    const ents = entries();
+    let list;
+    if (!files.length) {
+      list = h('div', { class: 'files-empty' + (project.mine ? ' can-drop' : ''), onclick: () => project.mine && pickFiles.click() },
+        icon(project.mine ? 'upload' : 'file'),
+        h('b', {}, project.mine ? 'Arrastra aquí los archivos de tu proyecto' : 'Este proyecto todavía no tiene archivos'),
+        project.mine && h('span', { class: 'muted' }, 'Código, planos, STL, PDF, hojas de cálculo… También carpetas enteras. Máx. 50 MB por archivo.'));
+    } else {
+      list = h('div', { class: 'files-list' },
+        cwd && h('button', { class: 'frow up', onclick: () => { cwd = parts.slice(0, -1).join('/') + (parts.length > 1 ? '/' : ''); paint(); } },
+          h('span', { class: 'fname' }, h('span', { class: 'ficon' }, icon('folder')), '..')),
+        ...ents.map(e => h('div', { class: 'frow' + (e.dir ? ' dir' : ''), role: 'button', tabindex: 0,
+          onclick: () => { if (e.dir) { cwd += e.name + '/'; paint(); } else openFileViewer(e); },
+          onkeydown: ev => { if (ev.key === 'Enter') ev.currentTarget.click(); } },
+          h('span', { class: 'fname' }, h('span', { class: 'ficon' }, icon(e.dir ? 'folder' : 'file')), h('span', { class: 'ftxt' }, e.name)),
+          h('span', { class: 'fmeta muted' }, e.dir ? `${e.count} archivo${e.count === 1 ? '' : 's'}` : fmtSize(e.size)),
+          h('span', { class: 'fdate muted' }, timeAgo(e.createdAt)),
+          h('span', { class: 'factions' },
+            !e.dir && h('a', { class: 'icon-btn', title: 'Descargar', href: `/api/files/${e.id}?as=download`, onclick: ev => ev.stopPropagation() }, icon('download')),
+            project.mine && h('button', { class: 'icon-btn', title: 'Borrar', onclick: ev => { ev.stopPropagation(); remove(e); } }, icon('trash'))))));
+    }
+    box.replaceChildren(head, progress, list, pickFiles, pickFolder);
+    onCount && onCount(files.length);
+  }
+
+  if (project.mine) {
+    box.addEventListener('dragover', e => { e.preventDefault(); box.classList.add('over'); });
+    box.addEventListener('dragleave', e => { if (!box.contains(e.relatedTarget)) box.classList.remove('over'); });
+    box.addEventListener('drop', async e => {
+      e.preventDefault(); box.classList.remove('over');
+      try { upload(await filesFromDrop(e.dataTransfer)); } catch { toast('No se pudieron leer los archivos'); }
+    });
+  }
+  paint();
+  box.pick = () => pickFiles.click();
+  if (autoUpload && project.mine) setTimeout(() => pickFiles.click(), 100);
+  return box;
 }
 
 function readmeView(project) {
@@ -691,12 +887,16 @@ function openEditProject(project, onSave) {
 }
 
 async function projectPage(id, section) {
-  const wantEdit = /\?editar$/.test(section || '');
+  const rawSection = section || '';
+  const wantEdit = /\?editar$/.test(rawSection);
   section = (section || '').replace(/\?.*$/, '');
   const { project } = await api('GET', `/api/projects/${encodeURIComponent(id)}`);
   if (!PROJECT_SECTIONS.some(s => s.key === section)) section = PROJECT_SECTIONS[0].key;
   const base = `#/p/${project.id}`;
   const owner = project.owner;
+  const fileCountEl = h('span', {});
+  const paintCount = n => fileCountEl.replaceChildren(icon('file'), `${n} archivo${n === 1 ? '' : 's'}`);
+  paintCount(project.fileCount);
 
   const head = h('header', { class: 'proj-head' },
     h('span', { class: 'proj-icon' }, icon('folder')),
@@ -707,6 +907,7 @@ async function projectPage(id, section) {
         h('b', {}, project.name)),
       project.description && h('p', { class: 'proj-desc' }, project.description),
       h('div', { class: 'proj-stats' },
+        fileCountEl,
         h('span', {}, icon('image'), `${project.postCount} publicaci${project.postCount === 1 ? 'ón' : 'ones'}`),
         h('span', {}, 'Creado ' + timeAgo(project.createdAt)))));
   const body = h('div', { class: 'section-body' });
@@ -714,13 +915,16 @@ async function projectPage(id, section) {
     h('div', { class: 'toolbar' }, sectionDropdown(section, k => { location.hash = `${base}/${k}`; }, PROJECT_SECTIONS)),
     body);
 
-  let grid = null, readmeBox = null;
+  let grid = null, readmeBox = null, filesBox = null;
   if (project.mine) {
     shell.context.replaceChildren(
       ...ctxSection('Proyecto', 'Tu proyecto. Todo lo que publiques aquí sale en Multimedia.'),
       ctxButton('plus', 'Nueva publicación', () => openComposer(p => {
         if (p.project && p.project.id === project.id && grid) grid.prepend(p); else if (p.project) location.hash = `#/p/${p.project.id}/multimedia`;
       }, project.id), true),
+      ctxButton('upload', 'Subir archivos', () => {
+        if (section === 'archivos' && filesBox) filesBox.pick(); else location.hash = `${base}/archivos?subir`;
+      }),
       ctxButton('book', 'Editar README', () => {
         if (section === 'readme' && readmeBox) readmeBox.edit(); else location.hash = `${base}/readme?editar`;
       }),
@@ -737,7 +941,10 @@ async function projectPage(id, section) {
       ctxButton('message', 'Enviar mensaje', () => { location.hash = `#/u/${owner.username}/contacto`; }));
   }
 
-  if (section === 'readme') {
+  if (section === 'archivos') {
+    filesBox = await filesView(project, /\?subir$/.test(rawSection), paintCount);
+    body.append(filesBox);
+  } else if (section === 'readme') {
     readmeBox = readmeView(project);
     body.append(readmeBox);
     if (wantEdit && project.mine) readmeBox.edit();

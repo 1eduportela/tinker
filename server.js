@@ -19,8 +19,11 @@ const PORT = Number(process.env.PORT) || 3000;
 const ROOT = __dirname;
 const DATA = path.join(ROOT, 'data');
 const UPLOADS = path.join(DATA, 'uploads');
+const FILES = path.join(DATA, 'files');
+const MAX_FILE = 50 * 1024 * 1024;
 const PUBLIC = path.join(ROOT, 'public');
 fs.mkdirSync(UPLOADS, { recursive: true });
+fs.mkdirSync(FILES, { recursive: true });
 
 // ---------- Configuracion (codigo de invitacion) ----------
 const CONFIG_FILE = path.join(DATA, 'config.json');
@@ -95,6 +98,15 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(from_id, to_id);
 CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_id, read_at);
+CREATE TABLE IF NOT EXISTS project_files (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  stored TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE (project_id, path)
+);
 `);
 // Columnas nuevas en bases de datos ya existentes
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
@@ -147,6 +159,27 @@ function readBody(req, limit = 8 * 1024 * 1024) {
     });
     req.on('error', reject);
   });
+}
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new HttpError(413, 'Archivo demasiado grande (max. 50 MB)')); req.resume(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+function cleanPath(p) {
+  const parts = String(p || '').replace(/\\/g, '/').split('/').map(s => s.trim())
+    .filter(s => s && s !== '.' && s !== '..');
+  const out = parts.join('/');
+  if (!out) throw new HttpError(400, 'Nombre de archivo no valido');
+  if (out.length > 300) throw new HttpError(400, 'La ruta del archivo es demasiado larga');
+  if (/[\x00-\x1f]/.test(out)) throw new HttpError(400, 'Nombre de archivo no valido');
+  return out;
 }
 function parseCookies(req) {
   const out = {};
@@ -380,11 +413,12 @@ route('POST', '/api/users/([A-Za-z0-9_]+)/follow', async (req, res, url, [userna
 const PROJECT_SELECT = `
   SELECT pr.*, u.username, u.display_name, u.avatar,
     (SELECT COUNT(*) FROM posts p WHERE p.project_id = pr.id) AS post_count,
+    (SELECT COUNT(*) FROM project_files f WHERE f.project_id = pr.id) AS file_count,
     (SELECT image FROM posts p WHERE p.project_id = pr.id AND p.image IS NOT NULL ORDER BY p.id DESC LIMIT 1) AS cover
   FROM projects pr JOIN users u ON u.id = pr.user_id`;
 const mapProject = (r, me, full) => ({
   id: r.id, name: r.name, description: r.description, createdAt: r.created_at, mine: r.user_id === me.id,
-  postCount: r.post_count || 0, cover: r.cover || null,
+  postCount: r.post_count || 0, fileCount: r.file_count || 0, cover: r.cover || null,
   owner: { username: r.username, displayName: r.display_name, avatar: r.avatar },
   ...(full ? { readme: r.readme } : {}),
 });
@@ -447,9 +481,82 @@ route('DELETE', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
   const me = requireUser(req);
   const p = ownProject(id, me);
   const images = db.prepare('SELECT image FROM posts WHERE project_id = ? AND image IS NOT NULL').all(p.id).map(r => r.image);
+  const stored = db.prepare('SELECT stored FROM project_files WHERE project_id = ?').all(p.id).map(r => r.stored);
   db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
   for (const img of images) fs.rm(path.join(UPLOADS, path.basename(img)), () => {});
+  for (const f of stored) fs.rm(path.join(FILES, f), () => {});
   send(res, 200, { ok: true });
+});
+
+// ---------- Archivos de proyecto ----------
+const mapFile = r => ({ id: r.id, path: r.path, size: r.size, createdAt: r.created_at });
+
+route('GET', '/api/projects/(\\d+)/files', async (req, res, url, [id]) => {
+  requireUser(req);
+  const p = projectById(id);
+  const rows = db.prepare('SELECT * FROM project_files WHERE project_id = ? ORDER BY path').all(p.id);
+  send(res, 200, { files: rows.map(mapFile) });
+});
+
+// Sube un archivo: el cuerpo es el archivo tal cual y la ruta va en ?path=
+route('POST', '/api/projects/(\\d+)/files', async (req, res, url, [id]) => {
+  const me = requireUser(req);
+  const p = ownProject(id, me);
+  const filePath = cleanPath(url.searchParams.get('path'));
+  const data = await readRaw(req, MAX_FILE);
+  const stored = crypto.randomBytes(16).toString('hex');
+  fs.writeFileSync(path.join(FILES, stored), data);
+  const old = db.prepare('SELECT id, stored FROM project_files WHERE project_id = ? AND path = ?').get(p.id, filePath);
+  if (old) {
+    db.prepare('UPDATE project_files SET size = ?, stored = ?, created_at = ? WHERE id = ?').run(data.length, stored, Date.now(), old.id);
+    fs.rm(path.join(FILES, old.stored), () => {});
+  } else {
+    db.prepare('INSERT INTO project_files (project_id, path, size, stored, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(p.id, filePath, data.length, stored, Date.now());
+  }
+  send(res, 200, { file: mapFile(db.prepare('SELECT * FROM project_files WHERE project_id = ? AND path = ?').get(p.id, filePath)) });
+});
+
+// Borra un archivo (?path=) o una carpeta entera (?folder=)
+route('DELETE', '/api/projects/(\\d+)/files', async (req, res, url, [id]) => {
+  const me = requireUser(req);
+  const p = ownProject(id, me);
+  let rows;
+  if (url.searchParams.has('folder')) {
+    const prefix = cleanPath(url.searchParams.get('folder')) + '/';
+    rows = db.prepare('SELECT id, stored FROM project_files WHERE project_id = ? AND substr(path, 1, ?) = ?').all(p.id, prefix.length, prefix);
+  } else {
+    rows = db.prepare('SELECT id, stored FROM project_files WHERE project_id = ? AND path = ?').all(p.id, cleanPath(url.searchParams.get('path')));
+  }
+  for (const r of rows) {
+    db.prepare('DELETE FROM project_files WHERE id = ?').run(r.id);
+    fs.rm(path.join(FILES, r.stored), () => {});
+  }
+  send(res, 200, { deleted: rows.length });
+});
+
+const INLINE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg' };
+route('GET', '/api/files/(\\d+)', async (req, res, url, [id]) => {
+  requireUser(req);
+  const f = db.prepare('SELECT * FROM project_files WHERE id = ?').get(Number(id));
+  if (!f) throw new HttpError(404, 'Archivo no encontrado');
+  const name = f.path.split('/').pop();
+  const ext = path.extname(name).toLowerCase();
+  const mode = url.searchParams.get('as');
+  const headers = { 'X-Content-Type-Options': 'nosniff', 'Content-Length': f.size };
+  if (mode === 'text') {
+    headers['Content-Type'] = 'text/plain; charset=utf-8';
+    headers['Content-Security-Policy'] = 'sandbox';
+  } else if (mode !== 'download' && INLINE_TYPES[ext]) {
+    headers['Content-Type'] = INLINE_TYPES[ext];
+    headers['Content-Disposition'] = `inline; filename*=UTF-8''${encodeURIComponent(name)}`;
+  } else {
+    headers['Content-Type'] = 'application/octet-stream';
+    headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
+  }
+  res.writeHead(200, headers);
+  fs.createReadStream(path.join(FILES, f.stored)).on('error', () => res.end()).pipe(res);
 });
 
 // ---------- Mensajes (chat) ----------
