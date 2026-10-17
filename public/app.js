@@ -17,6 +17,7 @@ const ICONS = {
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
   trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   chevron: '<polyline points="6 9 12 15 18 9"/>',
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
@@ -573,8 +574,103 @@ async function projectsView(user) {
 
 // =============== Proyecto ===============
 const PROJECT_SECTIONS = [
+  { key: 'readme', label: 'README', ic: 'book' },
   { key: 'multimedia', label: 'Multimedia', ic: 'image' },
 ];
+
+// Markdown sencillo y seguro (se escapa todo el HTML)
+function markdown(src) {
+  const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const inline = t => {
+    const codes = [];
+    t = esc(t).replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
+    t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|\/uploads\/[^)\s]+|\/api\/files\/\d+[^)\s]*)\)/g, '<img alt="$1" src="$2">')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*\w])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
+      .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+    return t.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+  };
+  const lines = src.replace(/\r\n?/g, '\n').split('\n');
+  let out = '', para = [], list = null;
+  const flushPara = () => { if (para.length) { out += `<p>${para.map(inline).join('<br>')}</p>`; para = []; } };
+  const flushList = () => { if (list) { out += `<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join('')}</${list.tag}>`; list = null; } };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let m;
+    if (/^```/.test(line)) {
+      flushPara(); flushList();
+      const code = [];
+      while (++i < lines.length && !/^```/.test(lines[i])) code.push(lines[i]);
+      out += `<pre><code>${esc(code.join('\n'))}</code></pre>`;
+    } else if ((m = /^(#{1,4})\s+(.*)$/.exec(line))) {
+      flushPara(); flushList();
+      out += `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`;
+    } else if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) {
+      flushPara(); flushList(); out += '<hr>';
+    } else if ((m = /^\s*[-*+]\s+(.*)$/.exec(line)) || (m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) {
+      flushPara();
+      const tag = /^\s*\d/.test(line) ? 'ol' : 'ul';
+      if (list && list.tag !== tag) flushList();
+      if (!list) list = { tag, items: [] };
+      list.items.push(m[1]);
+    } else if ((m = /^>\s?(.*)$/.exec(line))) {
+      flushPara(); flushList(); out += `<blockquote>${inline(m[1])}</blockquote>`;
+    } else if (!line.trim()) {
+      flushPara(); flushList();
+    } else {
+      flushList(); para.push(line);
+    }
+  }
+  flushPara(); flushList();
+  return out;
+}
+
+function readmeView(project) {
+  const box = h('section', { class: 'readme' });
+  const view = () => {
+    const bodyEl = h('div', { class: 'md' });
+    if (project.readme.trim()) bodyEl.innerHTML = markdown(project.readme);
+    else bodyEl.append(h('p', { class: 'muted' }, project.mine
+      ? 'Este proyecto todavía no tiene README. Cuenta de qué va, cómo está hecho y qué te falta.'
+      : 'Este proyecto todavía no tiene README.'));
+    box.replaceChildren(
+      h('div', { class: 'readme-head' }, icon('book'), h('b', {}, 'README.md'), h('span', { class: 'spacer' }),
+        project.mine && h('button', { class: 'icon-btn', title: 'Editar README', onclick: edit }, icon('edit'))),
+      bodyEl);
+  };
+  const edit = () => {
+    let mode = 'write';
+    const ta = h('textarea', { class: 'readme-ta', rows: 18, spellcheck: true }, project.readme);
+    const preview = h('div', { class: 'md readme-preview' });
+    const seg = h('div', { class: 'seg', style: 'width:240px' });
+    const area = h('div');
+    const paint = () => {
+      seg.replaceChildren(
+        h('button', { class: mode === 'write' ? 'active' : '', onclick: () => { mode = 'write'; paint(); } }, 'Escribir'),
+        h('button', { class: mode === 'preview' ? 'active' : '', onclick: () => { mode = 'preview'; paint(); } }, 'Vista previa'));
+      if (mode === 'preview') preview.innerHTML = markdown(ta.value) || '<p class="muted">Nada que mostrar todavía.</p>';
+      area.replaceChildren(mode === 'write' ? ta : preview);
+      if (mode === 'write') ta.focus();
+    };
+    const save = h('button', { class: 'btn' }, 'Guardar README');
+    save.onclick = async () => {
+      save.disabled = true;
+      try { project.readme = (await api('PUT', `/api/projects/${project.id}`, { readme: ta.value })).project.readme; toast('README guardado'); view(); }
+      catch (e) { toast(e.message); save.disabled = false; }
+    };
+    box.replaceChildren(
+      h('div', { class: 'readme-head' }, icon('book'), h('b', {}, 'Editando README.md'), h('span', { class: 'spacer' }), seg),
+      h('div', { class: 'readme-edit' }, area,
+        h('div', { class: 'row', style: 'margin-top:12px' },
+          h('span', { class: 'muted', style: 'font-size:13px' }, 'Admite Markdown: # Títulos, **negrita**, *cursiva*, listas con -, `código` y [enlaces](https://…)'),
+          h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: view }, 'Cancelar'), save)));
+    paint();
+  };
+  view();
+  box.edit = edit;
+  return box;
+}
 
 function openEditProject(project, onSave) {
   const name = h('input', { type: 'text', maxlength: 60, value: project.name });
@@ -595,6 +691,8 @@ function openEditProject(project, onSave) {
 }
 
 async function projectPage(id, section) {
+  const wantEdit = /\?editar$/.test(section || '');
+  section = (section || '').replace(/\?.*$/, '');
   const { project } = await api('GET', `/api/projects/${encodeURIComponent(id)}`);
   if (!PROJECT_SECTIONS.some(s => s.key === section)) section = PROJECT_SECTIONS[0].key;
   const base = `#/p/${project.id}`;
@@ -616,13 +714,16 @@ async function projectPage(id, section) {
     h('div', { class: 'toolbar' }, sectionDropdown(section, k => { location.hash = `${base}/${k}`; }, PROJECT_SECTIONS)),
     body);
 
-  let grid = null;
+  let grid = null, readmeBox = null;
   if (project.mine) {
     shell.context.replaceChildren(
       ...ctxSection('Proyecto', 'Tu proyecto. Todo lo que publiques aquí sale en Multimedia.'),
       ctxButton('plus', 'Nueva publicación', () => openComposer(p => {
         if (p.project && p.project.id === project.id && grid) grid.prepend(p); else if (p.project) location.hash = `#/p/${p.project.id}/multimedia`;
       }, project.id), true),
+      ctxButton('book', 'Editar README', () => {
+        if (section === 'readme' && readmeBox) readmeBox.edit(); else location.hash = `${base}/readme?editar`;
+      }),
       ctxButton('edit', 'Editar proyecto', () => openEditProject(project, () => render())),
       ctxButton('trash', 'Borrar proyecto', async () => {
         if (!confirm(`¿Borrar el proyecto "${project.name}"? Se borrarán también sus publicaciones.`)) return;
@@ -636,7 +737,11 @@ async function projectPage(id, section) {
       ctxButton('message', 'Enviar mensaje', () => { location.hash = `#/u/${owner.username}/contacto`; }));
   }
 
-  if (section === 'multimedia') {
+  if (section === 'readme') {
+    readmeBox = readmeView(project);
+    body.append(readmeBox);
+    if (wantEdit && project.mine) readmeBox.edit();
+  } else if (section === 'multimedia') {
     grid = masonry(async before =>
       (await api('GET', `/api/projects/${project.id}/posts${before ? `?before=${before}` : ''}`)).posts,
       project.mine ? 'Aún no hay publicaciones en este proyecto. ¡Sube la primera foto!' : 'Aún no hay publicaciones en este proyecto.');
