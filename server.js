@@ -61,24 +61,11 @@ CREATE TABLE IF NOT EXISTS posts (
   image TEXT,
   created_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS likes (
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-  PRIMARY KEY (user_id, post_id)
-);
-CREATE TABLE IF NOT EXISTS comments (
-  id INTEGER PRIMARY KEY,
-  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  text TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS follows (
   follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   followee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   PRIMARY KEY (follower_id, followee_id)
 );
-CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id);
 CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id);
 CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY,
@@ -108,6 +95,8 @@ CREATE TABLE IF NOT EXISTS project_files (
   UNIQUE (project_id, path)
 );
 `);
+// Tinker no tiene me gusta ni comentarios (para que no haya interes en meter bots): se borran si existian
+db.exec('DROP TABLE IF EXISTS likes; DROP TABLE IF EXISTS comments;');
 // Columnas nuevas en bases de datos ya existentes
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!userCols.includes('banner')) db.exec('ALTER TABLE users ADD COLUMN banner TEXT');
@@ -228,21 +217,18 @@ function unreadCount(userId) {
 
 const POST_SELECT = `
   SELECT p.id, p.user_id, p.title, p.text, p.image, p.created_at, p.project_id, pr.name AS project_name,
-         u.username, u.display_name, u.avatar,
-         (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes,
-         (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments,
-         EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = ?) AS liked
+         u.username, u.display_name, u.avatar
   FROM posts p JOIN users u ON u.id = p.user_id LEFT JOIN projects pr ON pr.id = p.project_id`;
 function mapPost(r, me) {
   return {
     id: r.id, title: r.title, text: r.text, image: r.image, createdAt: r.created_at,
     project: r.project_id ? { id: r.project_id, name: r.project_name } : null,
     author: { username: r.username, displayName: r.display_name, avatar: r.avatar },
-    likes: r.likes, comments: r.comments, liked: !!r.liked, mine: r.user_id === me.id,
+    mine: r.user_id === me.id,
   };
 }
 function getPost(id, me) {
-  const r = db.prepare(POST_SELECT + ' WHERE p.id = ?').get(me.id, id);
+  const r = db.prepare(POST_SELECT + ' WHERE p.id = ?').get(id);
   if (!r) throw new HttpError(404, 'Publicacion no encontrada');
   return mapPost(r, me);
 }
@@ -316,9 +302,9 @@ route('GET', '/api/feed', async (req, res, url) => {
   let rows;
   if (mode === 'following') {
     rows = db.prepare(POST_SELECT + ` WHERE p.id < ? AND (p.user_id = ? OR p.user_id IN
-      (SELECT followee_id FROM follows WHERE follower_id = ?)) ORDER BY p.id DESC LIMIT 20`).all(me.id, before, me.id, me.id);
+      (SELECT followee_id FROM follows WHERE follower_id = ?)) ORDER BY p.id DESC LIMIT 20`).all(before, me.id, me.id);
   } else {
-    rows = db.prepare(POST_SELECT + ' WHERE p.id < ? ORDER BY p.id DESC LIMIT 20').all(me.id, before);
+    rows = db.prepare(POST_SELECT + ' WHERE p.id < ? ORDER BY p.id DESC LIMIT 20').all(before);
   }
   send(res, 200, { posts: rows.map(r => mapPost(r, me)) });
 });
@@ -349,32 +335,6 @@ route('DELETE', '/api/posts/(\\d+)', async (req, res, url, [id]) => {
   send(res, 200, { ok: true });
 });
 
-route('POST', '/api/posts/(\\d+)/like', async (req, res, url, [id]) => {
-  const me = requireUser(req);
-  getPost(Number(id), me);
-  const del = db.prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?').run(me.id, Number(id));
-  if (del.changes === 0) db.prepare('INSERT INTO likes (user_id, post_id) VALUES (?, ?)').run(me.id, Number(id));
-  send(res, 200, { post: getPost(Number(id), me) });
-});
-
-route('GET', '/api/posts/(\\d+)/comments', async (req, res, url, [id]) => {
-  requireUser(req);
-  const rows = db.prepare(`SELECT c.id, c.text, c.created_at, u.username, u.display_name, u.avatar
-    FROM comments c JOIN users u ON u.id = c.user_id WHERE c.post_id = ? ORDER BY c.id`).all(Number(id));
-  send(res, 200, { comments: rows.map(r => ({ id: r.id, text: r.text, createdAt: r.created_at,
-    author: { username: r.username, displayName: r.display_name, avatar: r.avatar } })) });
-});
-
-route('POST', '/api/posts/(\\d+)/comments', async (req, res, url, [id]) => {
-  const me = requireUser(req);
-  getPost(Number(id), me);
-  const b = await readBody(req);
-  const text = str(b.text, 500, 'El comentario');
-  if (!text) throw new HttpError(400, 'El comentario esta vacio');
-  db.prepare('INSERT INTO comments (post_id, user_id, text, created_at) VALUES (?, ?, ?, ?)').run(Number(id), me.id, text, Date.now());
-  send(res, 200, { ok: true });
-});
-
 route('GET', '/api/users', async (req, res) => {
   const me = requireUser(req);
   const rows = db.prepare(`SELECT u.*, EXISTS(SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.followee_id = u.id) AS following
@@ -387,7 +347,7 @@ route('GET', '/api/users/([A-Za-z0-9_]+)', async (req, res, url, [username]) => 
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (!u) throw new HttpError(404, 'Ese usuario no existe');
   const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
-  const posts = db.prepare(POST_SELECT + ' WHERE p.id < ? AND p.user_id = ? ORDER BY p.id DESC LIMIT 20').all(me.id, before, u.id);
+  const posts = db.prepare(POST_SELECT + ' WHERE p.id < ? AND p.user_id = ? ORDER BY p.id DESC LIMIT 20').all(before, u.id);
   const c = (sql) => db.prepare(sql).get(u.id).n;
   send(res, 200, {
     user: { ...publicUser(u), createdAt: u.created_at, isMe: u.id === me.id,
@@ -473,7 +433,7 @@ route('GET', '/api/projects/(\\d+)/posts', async (req, res, url, [id]) => {
   const me = requireUser(req);
   const p = projectById(id);
   const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
-  const rows = db.prepare(POST_SELECT + ' WHERE p.id < ? AND p.project_id = ? ORDER BY p.id DESC LIMIT 20').all(me.id, before, p.id);
+  const rows = db.prepare(POST_SELECT + ' WHERE p.id < ? AND p.project_id = ? ORDER BY p.id DESC LIMIT 20').all(before, p.id);
   send(res, 200, { posts: rows.map(r => mapPost(r, me)) });
 });
 

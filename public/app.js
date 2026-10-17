@@ -10,7 +10,6 @@ const ICONS = {
   user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
-  heart: '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>',
   message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
   search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
@@ -131,37 +130,7 @@ function modal(content, cls = '', onClose) {
   return { close };
 }
 
-function openPost(post, onChange, onDelete) {
-  const likeBtn = h('button', { class: 'icon-btn', title: 'Me gusta' });
-  const paintLike = () => {
-    likeBtn.className = 'icon-btn' + (post.liked ? ' liked' : '');
-    likeBtn.replaceChildren(icon('heart'), h('span', {}, `${post.likes} me gusta`));
-  };
-  paintLike();
-  likeBtn.onclick = async () => {
-    try { Object.assign(post, (await api('POST', `/api/posts/${post.id}/like`)).post); paintLike(); onChange(); }
-    catch (e) { toast(e.message); }
-  };
-  const list = h('div', { class: 'pm-comments' }, h('div', { class: 'muted' }, 'Cargando…'));
-  const input = h('input', { type: 'text', placeholder: 'Añade un comentario…', maxlength: 500 });
-  const form = h('form', { class: 'comment-form', onsubmit: async (ev) => {
-    ev.preventDefault();
-    if (!input.value.trim()) return;
-    try {
-      await api('POST', `/api/posts/${post.id}/comments`, { text: input.value });
-      input.value = ''; post.comments++; onChange();
-      await loadComments(); list.scrollTop = list.scrollHeight;
-    } catch (e) { toast(e.message); }
-  } }, input, h('button', { class: 'btn' }, 'Enviar'));
-  async function loadComments() {
-    const { comments } = await api('GET', `/api/posts/${post.id}/comments`);
-    list.replaceChildren(...(comments.length ? comments.map(c => h('div', { class: 'comment' },
-      h('a', { href: `#/u/${c.author.username}` }, avatar(c.author, 'small')),
-      h('div', { class: 'bubble' },
-        h('div', { class: 'row' }, h('a', { href: `#/u/${c.author.username}` }, h('b', {}, c.author.displayName)),
-          h('small', { class: 'muted' }, timeAgo(c.createdAt))),
-        h('div', {}, c.text)))) : [h('div', { class: 'muted' }, 'Sin comentarios todavía. ¡Sé el primero!')]));
-  }
+function openPost(post, onDelete) {
   const media = post.image
     ? h('div', { class: 'pm-media' }, h('img', { src: post.image, alt: '' }))
     : h('div', { class: 'pm-media text', style: `--c:${colorFor(post.author.username)}` }, post.text);
@@ -182,11 +151,7 @@ function openPost(post, onChange, onDelete) {
         post.title && h('h2', { class: 'pm-title' }, post.title),
         post.image && post.text && h('p', { class: 'pm-text' }, post.text),
         post.project && h('a', { href: `#/p/${post.project.id}/multimedia`, class: 'proj-btn' },
-          icon('folder'), h('span', {}, post.project.name), h('span', { class: 'arrow' }, '→'))),
-      list,
-      h('div', { class: 'row pm-actions' }, likeBtn),
-      form)), 'wide');
-  loadComments().catch(e => list.replaceChildren(h('div', { class: 'muted' }, e.message)));
+          icon('folder'), h('span', {}, post.project.name), h('span', { class: 'arrow' }, '→'))))), 'wide');
 }
 
 async function openComposer(onPost, presetProjectId) {
@@ -358,21 +323,19 @@ function masonry(loader, emptyMsg) {
 }
 
 function tile(post, ctl) {
-  const meta = h('div', { class: 'tile-meta' });
-  const paintMeta = () => meta.replaceChildren(
+  const meta = h('div', { class: 'tile-meta' },
     h('a', { href: `#/u/${post.author.username}`, class: 'tile-author', onclick: e => e.stopPropagation() },
       avatar(post.author, 'xs'), h('span', {}, post.author.displayName)),
     h('span', { class: 'spacer' }),
-    h('span', { class: 'stat' + (post.liked ? ' liked' : '') }, icon('heart'), post.likes),
-    h('span', { class: 'stat' }, icon('message'), post.comments));
-  paintMeta();
+    post.project && h('a', { href: `#/p/${post.project.id}/multimedia`, class: 'tile-proj', title: post.project.name,
+      onclick: e => e.stopPropagation() }, icon('folder'), h('span', {}, post.project.name)));
   const t = h('article', { class: 'tile' },
     post.image
       ? h('img', { src: post.image, alt: '', width: post._w, height: post._h })
       : h('div', { class: 'tile-text', style: `--c:${colorFor(post.author.username)}` }, post.text),
     post.image && (post.title || post.text) && h('p', { class: 'tile-caption' }, post.title || post.text),
     meta);
-  t.onclick = () => openPost(post, paintMeta, () => ctl.remove(t));
+  t.onclick = () => openPost(post, () => ctl.remove(t));
   return t;
 }
 

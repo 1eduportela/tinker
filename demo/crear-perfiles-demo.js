@@ -258,24 +258,6 @@ Caja IP65 impresa en ASA con pantalla de radiación de 6 platos (\`cad/\`).`,
   },
 ];
 
-const COMMENTS = [
-  ['marcsoler', 'luciafdz', 0, '¡Qué limpio el diseño! ¿Qué grosor de placa central usas?'],
-  ['luciafdz', 'luciafdz', 0, '3 mm arriba y abajo, Marc. Los brazos de 5 mm.'],
-  ['irenenav', 'luciafdz', 2, 'Me encanta que diseñes tu propia controladora. ¿Compartes los Gerber?'],
-  ['irenenav', 'luciafdz', 6, 'Datos así valen oro. Gracias por publicarlos.'],
-  ['marcsoler', 'luciafdz', 8, '4 minutos con un 5" está muy bien 👏'],
-  ['luciafdz', 'marcsoler', 1, 'Muy buena idea lo del freno de Foucault. ¿Cuánta resistencia máxima consigues?'],
-  ['marcsoler', 'marcsoler', 1, 'Unos 900 W a 90 rpm, de sobra para mí 😅'],
-  ['irenenav', 'marcsoler', 5, '±1,8 % con un medidor casero es una pasada.'],
-  ['luciafdz', 'marcsoler', 9, '¡Enhorabuena, máquina! 🎉'],
-  ['irenenav', 'marcsoler', 9, '¡Bravo, Marc! Objetivo cumplido.'],
-  ['luciafdz', 'irenenav', 1, 'Qué buena forma de visualizar el espacio de trabajo.'],
-  ['marcsoler', 'irenenav', 4, 'Menos de 90 €, me lo apunto para el verano.'],
-  ['luciafdz', 'irenenav', 5, '38 µA es muy poquito, ¿qué módulo LoRa usas?'],
-  ['irenenav', 'irenenav', 5, 'Un RFM95W, Lucía. Lo apago del todo entre envíos.'],
-  ['marcsoler', 'irenenav', 9, 'Me la monto para la terraza sin duda.'],
-];
-
 // ------------------------------------------------------------------ utilidades
 const DEMO = PROFILES.map(p => p.username);
 const hashPassword = (pw, salt) => crypto.scryptSync(pw, salt, 64).toString('hex');
@@ -334,28 +316,15 @@ try {
   const all = PROFILES.flatMap(p => p.posts.map((x, i) => ({ ...x, user: p.username, idx: i,
     at: now - x.d * DAY - Math.floor(Math.random() * 10 * 3600000) })));
   all.sort((a, b) => a.at - b.at);
-  const postIds = {};
   for (const x of all) {
-    const r = db.prepare('INSERT INTO posts (user_id, project_id, title, text, image, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    db.prepare('INSERT INTO posts (user_id, project_id, title, text, image, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(ids[x.user], projectIds[x.user][x.p], x.title, x.text, copyImage(x.img), x.at);
-    postIds[`${x.user}:${x.idx}`] = { id: Number(r.lastInsertRowid), at: x.at };
   }
   // Seguirse entre ellos y que los usuarios reales los sigan
   const real = db.prepare(`SELECT id FROM users WHERE username NOT IN (${DEMO.map(() => '?').join(',')})`).all(...DEMO).map(r => r.id);
   const follow = db.prepare('INSERT OR IGNORE INTO follows (follower_id, followee_id) VALUES (?, ?)');
   for (const a of Object.values(ids)) for (const b of Object.values(ids)) if (a !== b) follow.run(a, b);
   for (const r of real) for (const d of Object.values(ids)) follow.run(r, d);
-  // Me gusta y comentarios
-  const like = db.prepare('INSERT OR IGNORE INTO likes (user_id, post_id) VALUES (?, ?)');
-  for (const [key, post] of Object.entries(postIds)) {
-    const owner = key.split(':')[0];
-    for (const u of DEMO) if (u !== owner && Math.random() < .75) like.run(ids[u], post.id);
-  }
-  COMMENTS.forEach(([who, owner, idx, text], k) => {
-    const post = postIds[`${owner}:${idx}`];
-    db.prepare('INSERT INTO comments (post_id, user_id, text, created_at) VALUES (?, ?, ?, ?)')
-      .run(post.id, ids[who], text, Math.min(now, post.at + (k % 5 + 1) * 3600000));
-  });
   // Un mensaje de bienvenida para cada usuario real
   for (const r of real) {
     db.prepare('INSERT INTO messages (from_id, to_id, text, created_at) VALUES (?, ?, ?, ?)')
@@ -367,7 +336,7 @@ try {
     - Lucia Fernandez (@luciafdz): drones
     - Marc Soler (@marcsoler): triatlon y rodillo inteligente
     - Irene Navarro (@irenenav): robotica y estacion meteo
-  30 publicaciones, 6 proyectos con README y archivos, comentarios y un mensaje para ti.
+  30 publicaciones, 6 proyectos con README y archivos, y un mensaje para ti.
   Los usuarios que ya tenias siguen a estos perfiles, asi que los veras en Inicio.
 
   Para quitarlos: "Borrar perfiles de prueba.bat"
