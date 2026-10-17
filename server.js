@@ -32,10 +32,11 @@ fs.mkdirSync(FILES, { recursive: true });
 const CONFIG_FILE = path.join(DATA, 'config.json');
 let config = {};
 try { config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch {}
-if (!config.inviteCode) {
-  config.inviteCode = crypto.randomBytes(4).toString('hex');
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
-}
+function saveConfig() { fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2)); }
+if (!config.inviteCode) config.inviteCode = crypto.randomBytes(4).toString('hex');
+// trustProxy: ponlo a true SOLO si Tinker esta detras de un intermediario (Cloudflare, Caddy...)
+if (config.trustProxy === undefined) config.trustProxy = false;
+saveConfig();
 
 // ---------- Base de datos ----------
 const db = new DatabaseSync(path.join(DATA, 'red.db'));
@@ -53,9 +54,12 @@ CREATE TABLE IF NOT EXISTS users (
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
-  token TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  last_used INTEGER NOT NULL,
+  ip TEXT NOT NULL DEFAULT '',
+  agent TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY,
@@ -117,6 +121,18 @@ CREATE TABLE IF NOT EXISTS project_files (
 `);
 // Tinker no tiene me gusta ni comentarios (para que no haya interes en meter bots): se borran si existian
 db.exec('DROP TABLE IF EXISTS likes; DROP TABLE IF EXISTS comments;');
+// Sesiones: de guardar la clave tal cual a guardar solo su huella (SHA-256)
+const sha256 = v => crypto.createHash('sha256').update(v).digest('hex');
+if (db.prepare('PRAGMA table_info(sessions)').all().some(c => c.name === 'token')) {
+  db.exec('BEGIN');
+  db.exec(`CREATE TABLE sessions_new (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL, last_used INTEGER NOT NULL, ip TEXT NOT NULL DEFAULT '', agent TEXT NOT NULL DEFAULT '')`);
+  for (const r of db.prepare('SELECT token, user_id, created_at FROM sessions').all()) {
+    db.prepare('INSERT OR IGNORE INTO sessions_new (id, user_id, created_at, last_used) VALUES (?, ?, ?, ?)').run(sha256(r.token), r.user_id, r.created_at, Date.now());
+  }
+  db.exec('DROP TABLE sessions; ALTER TABLE sessions_new RENAME TO sessions; COMMIT');
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
 // Columnas nuevas en bases de datos ya existentes
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!userCols.includes('banner')) db.exec('ALTER TABLE users ADD COLUMN banner TEXT');
@@ -204,12 +220,36 @@ function parseCookies(req) {
   });
   return out;
 }
+// La cookie lleva una clave aleatoria de 256 bits; en la base de datos solo se guarda su huella,
+// asi que aunque alguien copiara red.db no podria entrar con esas sesiones.
+const SESSION_IDLE = 30 * 24 * 3600 * 1000;   // se cierra tras 30 dias sin usarla
+const SESSION_MAX = 180 * 24 * 3600 * 1000;   // y como mucho dura 180 dias
+const MAX_SESSIONS_PER_USER = 20;
 function currentUser(req) {
+  if (req._user !== undefined) return req._user;
+  req._user = null;
   const sid = parseCookies(req).sid;
-  if (!sid) return null;
-  return db.prepare(`SELECT u.id, u.username, u.display_name, u.bio, u.avatar, u.banner, u.about
-    FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?`).get(sid) || null;
+  if (!sid || !/^[a-f0-9]{64}$/.test(sid)) return null;
+  const id = sha256(sid);
+  const r = db.prepare(`SELECT s.id AS session_id, s.created_at AS session_created, s.last_used, u.*
+    FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?`).get(id);
+  if (!r) return null;
+  const now = Date.now();
+  if (now - r.last_used > SESSION_IDLE || now - r.session_created > SESSION_MAX) {
+    db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+    return null;
+  }
+  if (now - r.last_used > 5 * 60 * 1000) db.prepare('UPDATE sessions SET last_used = ?, ip = ? WHERE id = ?').run(now, clientIp(req), id);
+  req._user = r;
+  return r;
 }
+function sessionCookie(req, value, maxAgeSec) {
+  return `sid=${value}; HttpOnly; Path=/; Max-Age=${maxAgeSec}; SameSite=Lax${isHttps(req) ? '; Secure' : ''}`;
+}
+setInterval(() => {
+  const now = Date.now();
+  db.prepare('DELETE FROM sessions WHERE last_used < ? OR created_at < ?').run(now - SESSION_IDLE, now - SESSION_MAX);
+}, 60 * 60 * 1000).unref();
 function requireUser(req) {
   const u = currentUser(req);
   if (!u) throw new HttpError(401, 'Tienes que iniciar sesion');
@@ -342,16 +382,23 @@ route('POST', '/api/register', async (req, res) => {
   const info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)')
     .run(username, displayName, hashPassword(password, salt), salt, Date.now());
   securityLog('registro', req, username);
-  return login(res, Number(info.lastInsertRowid));
+  return login(req, res, Number(info.lastInsertRowid));
 });
 
-function login(res, userId) {
+function createSession(req, userId) {
   const token = crypto.randomBytes(32).toString('hex');
-  db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)').run(token, userId, Date.now());
+  const now = Date.now();
+  db.prepare('INSERT INTO sessions (id, user_id, created_at, last_used, ip, agent) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(sha256(token), userId, now, now, clientIp(req), String(req.headers['user-agent'] || '').slice(0, 200));
+  // Como mucho 20 sesiones abiertas por persona: se cierran las mas antiguas
+  db.prepare(`DELETE FROM sessions WHERE user_id = ? AND id NOT IN
+    (SELECT id FROM sessions WHERE user_id = ? ORDER BY last_used DESC LIMIT ?)`).run(userId, userId, MAX_SESSIONS_PER_USER);
+  return token;
+}
+function login(req, res, userId) {
+  const token = createSession(req, userId);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-  send(res, 200, { user: publicUser(u) }, {
-    'Set-Cookie': `sid=${token}; HttpOnly; Path=/; Max-Age=31536000; SameSite=Lax`,
-  });
+  send(res, 200, { user: publicUser(u) }, { 'Set-Cookie': sessionCookie(req, token, SESSION_MAX / 1000) });
 }
 
 // Hash falso para tardar lo mismo aunque el usuario no exista (no se puede saber si existe midiendo tiempos)
@@ -378,13 +425,13 @@ route('POST', '/api/login', async (req, res) => {
   }
   clearKey(userKey);
   securityLog('login', req, u.username);
-  login(res, u.id);
+  login(req, res, u.id);
 });
 
 route('POST', '/api/logout', async (req, res) => {
   const sid = parseCookies(req).sid;
-  if (sid) db.prepare('DELETE FROM sessions WHERE token = ?').run(sid);
-  send(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax' });
+  if (sid) db.prepare('DELETE FROM sessions WHERE id = ?').run(sha256(String(sid)));
+  send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '', 0) });
 });
 
 route('GET', '/api/me', async (req, res) => {
