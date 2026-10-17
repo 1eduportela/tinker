@@ -21,6 +21,7 @@ Sin dependencias: solo Node.js (usa el SQLite integrado).
 - **Sin me gusta ni comentarios**, a propósito: así no hay interés en meter bots ni en perseguir números.
 
 ## Perfiles de prueba
-`Crear perfiles de prueba.bat` añade tres perfiles de ejemplo (Lucía, Marc e Irene) con 30 publicaciones,
-6 proyectos, archivos y un mensaje. `Borrar perfiles de prueba.bat` los quita.
+`Crear perfiles de prueba.bat` añade cinco perfiles de ejemplo (Lucía, Marc, Irene, Pablo y Sara) con
+3 proyectos y 10 publicaciones cada uno (varias en carrusel), README, archivos y un mensaje.
+El contenido está en `demo/contenido.js`. `Borrar perfiles de prueba.bat` los quita.
 Las imágenes se generan con `python3 demo/generar_imagenes.py`.

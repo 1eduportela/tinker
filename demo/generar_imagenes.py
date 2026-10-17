@@ -121,6 +121,90 @@ def blueprint(name, kind, title, author, w=1200, h=900, seed=0):
         ax.add_patch(Rectangle((w * .62 + 150, h * .5 - 40), 70, 80, fill=False, ec=line, lw=1.8))
         ax.text(w * .62 + 185, h * .5, 'FRENO\nFOUCAULT', color=line, ha='center', va='center', fontsize=9)
         dim(w * .62 - 120, h * .5 + 160, w * .62 + 120, h * .5 + 160, 'Ø 240 mm · 4,2 kg', 0)
+    elif kind == 'wing':
+        span, root, tip, sweep = w * .7, h * .32, h * .14, h * .2
+        x0 = cx - span / 2; yr = cy + root / 2
+        pts = [[cx, yr], [x0, yr - sweep], [x0, yr - sweep - tip], [cx, yr - root - sweep * .1], [cx + span / 2, yr - sweep - tip], [cx + span / 2, yr - sweep]]
+        ax.add_patch(Polygon([[cx, yr], [x0, yr - sweep], [x0, yr - sweep - tip], [cx, yr - root]], closed=True, fill=False, ec=line, lw=2.4))
+        ax.add_patch(Polygon([[cx, yr], [cx + span / 2, yr - sweep], [cx + span / 2, yr - sweep - tip], [cx, yr - root]], closed=True, fill=False, ec=line, lw=2.4))
+        for sgn in (-1, 1):
+            ex = cx + sgn * span / 2
+            ax.add_patch(Polygon([[cx + sgn * span * .12, yr - root - sweep * .24 + root * .2], [ex, yr - sweep - tip], [ex, yr - sweep - tip + tip * .35], [cx + sgn * span * .12, yr - root - sweep * .24 + root * .32]], closed=True, fill=False, ec=YELLOW, lw=1.6))
+        ax.add_patch(FancyBboxPatch((cx - 30, yr - root * .85), 60, root * .8, boxstyle='round,pad=0,rounding_size=20', fill=False, ec=line, lw=2))
+        ax.add_patch(Circle((cx, yr - root - 18), 16, fill=False, ec=line, lw=1.8)); ax.plot([cx - 60, cx + 60], [yr - root - 18] * 2, color=line, lw=1.2, ls=(0, (6, 4)))
+        dim(x0, cy - root * .9, x0 + span, cy - root * .9, f'Envergadura {int(span * 1.2)} mm', -10)
+        ax.text(cx + span * .3, yr - sweep * .5 - 40, 'ELEVÓN', color=YELLOW, fontsize=11, fontweight='bold')
+    elif kind == 'linebot':
+        ax.add_patch(FancyBboxPatch((cx - 150, cy - 110), 300, 220, boxstyle='round,pad=0,rounding_size=30', fill=False, ec=line, lw=2.4))
+        for sgn in (-1, 1): ax.add_patch(Rectangle((cx + sgn * 150 - (24 if sgn < 0 else 0), cy - 70), 24, 90, fill=False, ec=line, lw=2.2))
+        ax.add_patch(Rectangle((cx - 170, cy + 140), 340, 30, fill=False, ec=line, lw=2))
+        for k in range(8): ax.add_patch(Rectangle((cx - 155 + k * 40, cy + 147), 20, 16, fill=False, ec=YELLOW, lw=1.4))
+        ax.plot([cx - 60, cx - 150], [cy + 110, cy + 140], color=line, lw=1.6); ax.plot([cx + 60, cx + 150], [cy + 110, cy + 140], color=line, lw=1.6)
+        ax.add_patch(Circle((cx, cy - 90), 12, fill=False, ec=line, lw=1.6))
+        ax.add_patch(Rectangle((cx - 50, cy - 30), 100, 70, fill=False, ec=line, lw=1.6)); ax.text(cx, cy + 5, 'STM32', color=line, ha='center', va='center', fontsize=11)
+        ax.text(cx, cy + 185, '8 sensores IR', color=YELLOW, ha='center', fontsize=12, fontweight='bold')
+        dim(cx - 174, cy - 140, cx + 174, cy - 140, '120 mm', 0)
+    elif kind == 'cnc':
+        bx0, by0, bw = w * .14, h * .2, w * .6
+        ax.add_patch(Rectangle((bx0, by0), bw, 34, fill=False, ec=line, lw=2.4))
+        for sx in (bx0 + 10, bx0 + bw - 46): ax.add_patch(Rectangle((sx, by0 + 34), 36, h * .42, fill=False, ec=line, lw=2.2))
+        gy = by0 + 34 + h * .42 - 60
+        ax.add_patch(Rectangle((bx0 + 10, gy), bw - 20, 50, fill=False, ec=line, lw=2.4))
+        zx = bx0 + bw * .55
+        ax.add_patch(Rectangle((zx - 45, gy - 150), 90, 230, fill=False, ec=line, lw=2.2))
+        ax.add_patch(Rectangle((zx - 26, gy - 230), 52, 90, fill=False, ec=line, lw=2)); ax.plot([zx, zx], [gy - 230, gy - 262], color=YELLOW, lw=3)
+        ax.add_patch(Rectangle((bx0 + 70, by0 + 34), bw - 140, 26, fill=False, ec=line, lw=1.6))
+        for k in range(9): ax.plot([bx0 + 80 + k * (bw - 160) / 8] * 2, [by0 + 34, by0 + 60], color=line, lw=.8)
+        dim(bx0, by0 - 40, bx0 + bw, by0 - 40, 'Área útil 300 × 400 mm', 0)
+        ax.text(zx + 60, gy - 200, 'HUSILLO 800 W', color=YELLOW, fontsize=11, fontweight='bold')
+    elif kind == 'bike':
+        rw = 150; rx, ry = w * .26, h * .3; fx, fy = w * .66, h * .3
+        bb = (w * .45, h * .27); st = (w * .41, h * .72); ht1 = (w * .62, h * .66); ht2 = (w * .63, h * .56)
+        for c in [(rx, ry), (fx, fy)]: ax.add_patch(Circle(c, rw, fill=False, ec=line, lw=2.4)); ax.add_patch(Circle(c, 12, fill=False, ec=line, lw=1.6))
+        for a, b2 in [(bb, st), (st, ht1), (bb, ht2), (ht1, ht2), ((rx, ry), bb), ((rx, ry), st)]:
+            ax.plot([a[0], b2[0]], [a[1], b2[1]], color='#d9c27a', lw=7, solid_capstyle='round'); ax.plot([a[0], b2[0]], [a[1], b2[1]], color=line, lw=1.2)
+        ax.plot([ht2[0], fx], [ht2[1], fy], color=line, lw=2.4); ax.plot([ht1[0], ht1[0] - 10], [ht1[1], ht1[1] + 50], color=line, lw=2)
+        ax.plot([st[0], st[0] - 14], [st[1], st[1] + 60], color=line, lw=2); ax.add_patch(Rectangle((st[0] - 60, st[1] + 60), 90, 14, fill=False, ec=line, lw=1.8))
+        ax.add_patch(Circle(bb, 22, fill=False, ec=line, lw=1.8))
+        ax.add_patch(Arc(bb, 120, 120, theta1=70, theta2=100, ec=YELLOW, lw=2)); ax.text(bb[0] - 40, bb[1] + 75, '73,5°', color=YELLOW, fontsize=12, fontweight='bold')
+        ax.add_patch(Arc(ht2, 120, 120, theta1=180, theta2=250, ec=YELLOW, lw=2)); ax.text(ht2[0] - 110, ht2[1] - 60, '71°', color=YELLOW, fontsize=12, fontweight='bold')
+        dim(rx, ry - rw - 30, fx, fy - rw - 30, 'Distancia entre ejes 1.045 mm', 0)
+        ax.text(w * .5, h * .82, 'Tubos de bambú · uniones de fibra de lino + epoxi', color=line, ha='center', fontsize=12)
+    elif kind == 'corexy':
+        s0 = min(w, h) * .62; x0, y0 = cx - s0 / 2, cy - s0 / 2
+        ax.add_patch(Rectangle((x0, y0), s0, s0, fill=False, ec=line, lw=3))
+        corners = [(x0 + 20, y0 + 20), (x0 + s0 - 20, y0 + 20), (x0 + s0 - 20, y0 + s0 - 20), (x0 + 20, y0 + s0 - 20)]
+        for c in corners: ax.add_patch(Circle(c, 14, fill=False, ec=line, lw=1.8))
+        car = (cx + 40, cy + 30); gy = car[1]
+        ax.plot([x0 + 20, x0 + s0 - 20], [gy, gy], color=line, lw=2.2)
+        ax.add_patch(Rectangle((car[0] - 40, car[1] - 34), 80, 68, fill=False, ec=line, lw=2.2)); ax.add_patch(Circle(car, 10, fill=False, ec=YELLOW, lw=2))
+        for (a, b2), col in [((corners[0], corners[3]), YELLOW), ((corners[1], corners[2]), '#6cc4ff')]:
+            ax.plot([a[0], car[0] - 40, b2[0]], [a[1], car[1], b2[1]], color=col, lw=1.6)
+        ax.plot([corners[0][0], corners[1][0]], [corners[0][1], corners[1][1]], color=YELLOW, lw=1.6)
+        ax.plot([corners[3][0], car[0] + 40, corners[2][0]], [corners[3][1], car[1], corners[2][1]], color='#6cc4ff', lw=1.6)
+        for c in corners[:2]: ax.add_patch(Rectangle((c[0] - 22, c[1] - 22), 44, 44, fill=False, ec=line, lw=1.2, ls=(0, (4, 3))))
+        dim(x0, y0 - 30, x0 + s0, y0 - 30, 'Volumen 235 × 235 × 250 mm', 0)
+        ax.text(x0 + 30, y0 + s0 + 16, 'CORREAS GT2 · CINEMÁTICA COREXY', color=line, fontsize=11, fontweight='bold')
+    elif kind == 'fingerboard':
+        bw2, bh2 = w * .72, h * .36; x0, y0 = cx - bw2 / 2, cy - bh2 / 2 + 40
+        ax.add_patch(FancyBboxPatch((x0, y0), bw2, bh2, boxstyle='round,pad=0,rounding_size=40', fill=False, ec=line, lw=2.6))
+        for row, (dep, n) in enumerate([(20, 2), (15, 3), (10, 4)]):
+            yy = y0 + bh2 - 50 - row * 70; seg = (bw2 - 80) / n
+            for k in range(n): ax.add_patch(FancyBboxPatch((x0 + 40 + k * seg + 10, yy), seg - 20, 30, boxstyle='round,pad=0,rounding_size=8', fill=False, ec=line, lw=1.8))
+            ax.text(x0 - 16, yy + 15, f'{dep} mm', color=YELLOW, ha='right', va='center', fontsize=11, fontweight='bold')
+        for k in range(4): ax.add_patch(Rectangle((x0 + 60 + k * (bw2 - 180) / 3, y0 - 70), 60, 40, fill=False, ec=line, lw=1.8))
+        ax.text(cx, y0 - 100, '4 CÉLULAS DE CARGA DE 100 kg', color=line, ha='center', fontsize=11, fontweight='bold')
+        dim(x0, y0 + bh2 + 30, x0 + bw2, y0 + bh2 + 30, '600 mm', 0)
+    elif kind == 'yagi':
+        bx1, bx2, by = w * .1, w * .86, cy + 20
+        ax.plot([bx1, bx2], [by, by], color=line, lw=3)
+        lens = [(.96, 'R'), (.84, 'DE'), (.78, 'D1'), (.74, 'D2'), (.71, 'D3'), (.69, 'D4')]
+        for k, (L, lab) in enumerate(lens):
+            x = bx1 + 40 + k * (bx2 - bx1 - 80) / (len(lens) - 1); half = L * h * .32
+            ax.plot([x, x], [by - half, by + half], color=YELLOW if lab == 'DE' else line, lw=2.6)
+            ax.text(x, by + half + 20, lab, color=line, ha='center', fontsize=11, fontweight='bold')
+            ax.text(x, by - half - 26, f'{int(L * 1040)} mm', color=line, ha='center', fontsize=9)
+        dim(bx1 + 40, by - h * .36, bx2 - 40, by - h * .36, 'Boom 1.250 mm · 137 MHz', 0)
     # cajetín
     tx, ty, tw, th = w - 30 - 360, 30, 360, 110
     ax.add_patch(Rectangle((tx, ty), tw, th, fill=False, ec=line, lw=2))
@@ -193,6 +277,34 @@ def render(name, kind, w=1000, h=1000, bg=('#2a2d33', '#0e0f12'), elev=28, azim=
         parts += [(disc, '#c9ced6'), ([[[60 + 80 * math.cos(a), 6, 100 + 80 * math.sin(a)] for a in t]], '#aeb4bd')]
         parts += [(box(52, -8, 0, 16, 16, 100), '#2b2f36'), (box(120, -30, 70, 40, 60, 60), YELLOW), (cyl(-60, 0, 14, 22, 30), '#555')]
         ax.set_xlim(-160, 180); ax.set_ylim(-170, 170); ax.set_zlim(-40, 220)
+    elif kind == 'wing':
+        span, root, tip, sweep = 300, 150, 60, 90
+        for sgn in (-1, 1):
+            parts.append(([[[0, 0, 0], [sgn * span, -sweep, 0], [sgn * span, -sweep - tip, 0], [0, -root, 0]]], '#e6e6e6'))
+            parts.append(([[[0, 0, 4], [sgn * span, -sweep, 2], [sgn * span, -sweep - tip, 2], [0, -root, 4]]], '#f2f2f2'))
+            parts.append(([[[sgn * 40, -root * .88, 3], [sgn * span, -sweep - tip, 2.5], [sgn * span, -sweep - tip + 18, 2.5], [sgn * 40, -root * .72, 3]]], YELLOW))
+            parts.append((box(sgn * span - (6 if sgn > 0 else 0), -sweep - tip, 0, 6, tip, 40), '#2b2b2b'))
+        parts += [(box(-22, -root + 10, 0, 44, root - 20, 26), '#2b2f36'), (cyl(0, -root - 6, 13, 9, 4), '#9aa0a6')]
+        ax.set_xlim(-320, 320); ax.set_ylim(-400, 240); ax.set_zlim(-200, 200)
+    elif kind == 'linebot':
+        parts += [(box(-60, -45, 8, 120, 90, 3), '#1b4d8c'), (box(-70, 45, 4, 140, 16, 3), '#1b4d8c'), (box(-30, -20, 11, 60, 40, 6), '#1b1b1b')]
+        for sx in (-1, 1): parts.append(([[[sx * 66, -15 + 22 * math.cos(a), 12 + 22 * math.sin(a)] for a in np.linspace(0, 2 * np.pi, 32)]], '#222'))
+        for k in range(8): parts.append((box(-64 + k * 16, 50, 2, 8, 6, 2), YELLOW))
+        parts += [(box(-20, -45, 11, 40, 20, 12), '#d0d0d0'), (cyl(0, -38, 0, 6, 8), '#9aa0a6')]
+        ax.set_xlim(-110, 110); ax.set_ylim(-110, 110); ax.set_zlim(-60, 120)
+    elif kind == 'cnc':
+        parts += [(box(-160, -120, 0, 320, 240, 16), '#2b2f36'), (box(-130, -100, 16, 260, 200, 10), '#c9a227')]
+        for sx in (-160, 140): parts.append((box(sx, -20, 16, 20, 40, 200), '#d8dbe0'))
+        parts += [(box(-160, -20, 190, 320, 30, 40), '#d8dbe0'), (box(10, -40, 120, 60, 25, 110), YELLOW), (cyl(40, -28, 70, 16, 50), '#2b2b2b'), (cyl(40, -28, 50, 3, 20), '#cccccc')]
+        ax.set_xlim(-200, 200); ax.set_ylim(-200, 200); ax.set_zlim(0, 300)
+    elif kind == 'corexy':
+        L = 200
+        for x in (-L, L - 15):
+            for y in (-L, L - 15): parts.append((box(x, y, 0, 15, 15, 300), '#d8dbe0'))
+        for z in (0, 285):
+            parts += [(box(-L, -L, z, 2 * L, 15, 15), '#d8dbe0'), (box(-L, L - 15, z, 2 * L, 15, 15), '#d8dbe0'), (box(-L, -L, z, 15, 2 * L, 15), '#d8dbe0'), (box(L - 15, -L, z, 15, 2 * L, 15), '#d8dbe0')]
+        parts += [(box(-L + 15, 20, 280, 2 * L - 30, 10, 10), '#2b2b2b'), (box(10, 5, 262, 50, 40, 30), YELLOW), (box(-150, -150, 120, 300, 300, 6), '#1d1d1d')]
+        ax.set_xlim(-260, 260); ax.set_ylim(-260, 260); ax.set_zlim(-40, 340)
     for faces, col in parts:
         ax.add_collection3d(Poly3DCollection(faces, facecolors=shade(faces, col), edgecolors=(0, 0, 0, .15), linewidths=.3))
     ax.view_init(elev=elev, azim=azim)
@@ -309,7 +421,101 @@ def chart(name, kind, w=1100, h=760, seed=2):
         ax.scatter(x, y, s=3, c=np.hypot(x, y), cmap=matplotlib.colors.LinearSegmentedColormap.from_list('y', ['#3c3c3c', YELLOW])); ax.set_aspect('equal')
         ax.set_xlabel('X (mm)', color='#9a9a9a'); ax.set_ylabel('Y (mm)', color='#9a9a9a')
         chart_title(fig, 'Espacio de trabajo del SCARA', 'Cinemática directa · 5.000 posiciones', '275 mm', 'alcance')
+    elif kind == 'airfoil':
+        x = np.linspace(0, 1, 200); t = .12; yt = 5 * t * (.2969 * np.sqrt(x) - .126 * x - .3516 * x ** 2 + .2843 * x ** 3 - .1015 * x ** 4)
+        m, pp = .02, .4; yc = np.where(x < pp, m / pp ** 2 * (2 * pp * x - x ** 2), m / (1 - pp) ** 2 * ((1 - 2 * pp) + 2 * pp * x - x ** 2))
+        ax.fill_between(x, yc - yt, yc + yt, color=YELLOW, alpha=.85); ax.plot(x, yc, color='#141414', lw=1.5, ls='--'); ax.set_aspect('equal'); ax.set_ylim(-.15, .2)
+        ax.set_xlabel('Cuerda (x/c)', color='#9a9a9a')
+        chart_title(fig, 'Perfil del ala · MH45 modificado', 'Espesor 12 % · curvatura 2 % · estable sin cola', '9,8', 'L/D a crucero')
+    elif kind == 'speed':
+        t = np.linspace(0, 600, 800); v = 16 + 4 * np.sin(t / 50) + rng.normal(0, .5, 800); v[:40] = np.linspace(0, v[40], 40); alt = np.clip(60 + 25 * np.sin(t / 90) + np.cumsum(rng.normal(0, .15, 800)), 0, None); alt[:40] = np.linspace(0, alt[40], 40); alt[-40:] = np.linspace(alt[-40], 0, 40)
+        ax.plot(t / 60, v * 3.6, color=YELLOW, lw=2); ax.set_ylabel('Velocidad (km/h)', color='#9a9a9a'); ax.set_xlabel('Minutos', color='#9a9a9a')
+        a2 = ax.twinx(); a2.fill_between(t / 60, alt, color='#6cc4ff', alpha=.18); a2.plot(t / 60, alt, color='#6cc4ff', lw=1.5); a2.tick_params(colors='#6cc4ff', labelsize=11); a2.set_ylabel('Altura (m)', color='#6cc4ff')
+        for sp in a2.spines.values(): sp.set_visible(False)
+        chart_title(fig, 'Primer vuelo largo del ala', 'Telemetría GPS · 10 minutos', '68 km/h', 'velocidad media')
+    elif kind == 'marathon_weeks':
+        wk = np.arange(1, 19); km = np.clip(45 + wk * 3.2 + rng.normal(0, 4, 18), 30, None); km[[3, 7, 11, 15]] *= .7; km[-2:] = [52, 30]; longr = np.clip(16 + wk * .9, 16, 32); longr[-2:] = [18, 12]
+        ax.bar(wk, km, color=['#3c3c3c' if i not in (3, 7, 11, 15) else '#2a2a2a' for i in range(18)]); ax.plot(wk, longr * 3, color=YELLOW, lw=3, marker='o', ms=5)
+        ax.set_xlabel('Semana', color='#9a9a9a'); ax.set_ylabel('km por semana', color='#9a9a9a')
+        chart_title(fig, 'Plan de maratón · 18 semanas', 'Barras: volumen semanal · línea: tirada larga (×3)', '1.410 km', 'en total')
+    elif kind == 'laps':
+        v = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7']; tt = [21.4, 18.9, 16.2, 14.8, 13.1, 12.4, 11.6]
+        ax.bar(v, tt, color=['#3c3c3c'] * 6 + [YELLOW]); ax.set_ylabel('Tiempo por vuelta (s)', color='#9a9a9a'); ax.set_xlabel('Versión del controlador', color='#9a9a9a')
+        for i, val in enumerate(tt): ax.text(i, val + .3, f'{val:.1f}', color='white', ha='center', fontsize=11)
+        chart_title(fig, 'Tiempo por vuelta en la pista oficial', 'PID → PID con anticipación → control por curvatura', '−46 %', 'desde la v1')
+    elif kind == 'accuracy':
+        xg, yg = np.meshgrid(np.linspace(0, 300, 13), np.linspace(0, 400, 17)); err = .02 + .03 * np.exp(-((xg - 150) ** 2 + (yg - 200) ** 2) / 20000) + rng.normal(0, .004, xg.shape)
+        im = ax.pcolormesh(xg, yg, err * 1000, cmap=matplotlib.colors.LinearSegmentedColormap.from_list('e', ['#1f3d2e', '#3c3c3c', YELLOW]), shading='auto'); ax.set_aspect('equal')
+        cb = fig.colorbar(im, ax=ax, fraction=.03); cb.ax.tick_params(colors='#9a9a9a'); cb.outline.set_visible(False); cb.set_label('Error (µm)', color='#9a9a9a')
+        ax.set_xlabel('X (mm)', color='#9a9a9a'); ax.set_ylabel('Y (mm)', color='#9a9a9a')
+        chart_title(fig, 'Mapa de precisión de la mesa', 'Medido con comparador en 221 puntos', '±0,04 mm', 'error máximo')
+    elif kind == 'stiffness':
+        f = np.linspace(0, 1200, 30)
+        for lab, k, c in [('Bambú + lino', 1.0, YELLOW), ('Acero Cr-Mo', .82, '#6cc4ff'), ('Aluminio 6061', .7, '#ff8a5b')]: ax.plot(f, f / (k * 900), color=c, lw=2.5, marker='o', ms=3, label=lab)
+        ax.legend(frameon=False, labelcolor='white', fontsize=12, loc='upper left'); ax.set_xlabel('Carga en el pedalier (N)', color='#9a9a9a'); ax.set_ylabel('Deformación (mm)', color='#9a9a9a')
+        chart_title(fig, 'Ensayo de rigidez del cuadro', 'Carga lateral en el eje de pedalier', '1,33 mm', 'a 1.200 N')
+    elif kind == 'resonance':
+        fr = np.linspace(10, 150, 400)
+        for lab, f0, c in [('Eje X', 48, YELLOW), ('Eje Y', 61, '#6cc4ff')]: ax.plot(fr, 1 / np.sqrt((1 - (fr / f0) ** 2) ** 2 + (.12 * fr / f0) ** 2) + rng.normal(0, .08, 400), color=c, lw=2, label=lab)
+        ax.legend(frameon=False, labelcolor='white', fontsize=12); ax.set_xlabel('Frecuencia (Hz)', color='#9a9a9a'); ax.set_ylabel('Amplitud relativa', color='#9a9a9a')
+        chart_title(fig, 'Resonancias medidas con acelerómetro', 'Input shaping en Klipper · ADXL345', '48 / 61 Hz', 'X / Y')
+    elif kind == 'force':
+        t = np.linspace(0, 10, 500)
+        for lab, peak, c in [('Mano izquierda', 31, '#6cc4ff'), ('Mano derecha', 34, YELLOW)]:
+            f = np.where((t > 1) & (t < 8), peak * (1 - np.exp(-(t - 1) * 3)) * (1 - .02 * (t - 1)), 0) + rng.normal(0, .4, 500); ax.plot(t, np.clip(f, 0, None), color=c, lw=2.2, label=lab)
+        ax.legend(frameon=False, labelcolor='white', fontsize=12); ax.set_xlabel('Segundos', color='#9a9a9a'); ax.set_ylabel('Fuerza (kg)', color='#9a9a9a')
+        chart_title(fig, 'Suspensión de 7 s en regleta de 20 mm', 'Fuerza por mano en tiempo real', '65 kg', 'total máximo')
+    elif kind == 'strength_weeks':
+        wk = np.arange(1, 13); mx = 54 + np.cumsum(rng.uniform(.4, 1.6, 12)); ax.plot(wk, mx, color=YELLOW, lw=3, marker='o', ms=7)
+        ax.fill_between(wk, mx, 50, color=YELLOW, alpha=.1); ax.set_ylim(50, 72); ax.set_xlabel('Semana', color='#9a9a9a'); ax.set_ylabel('Fuerza máxima (kg)', color='#9a9a9a')
+        chart_title(fig, 'Progreso en 12 semanas', 'Fuerza máxima en regleta de 20 mm', '+19 %', 'de mejora')
+    elif kind == 'climb':
+        d = np.linspace(0, 16.4, 400); e = 1940 + 1460 * np.clip(np.sin(d / 16.4 * np.pi) ** 1.6, 0, None) + 40 * np.sin(d * 3) * np.sin(d / 16.4 * np.pi)
+        ax.fill_between(d, e, 1800, color=YELLOW, alpha=.2); ax.plot(d, e, color=YELLOW, lw=3); ax.set_ylim(1800, 3500)
+        for x_, lab in [(0, 'La Besurta'), (4.1, 'Refugio de la Renclusa'), (6.6, 'Portillón Superior'), (8.2, 'Aneto 3.404 m')]:
+            yv = np.interp(x_, d, e); ax.plot([x_], [yv], 'o', color='white', ms=7); ax.text(x_ + .15, yv + 50, lab, color='white', fontsize=11, fontweight='bold')
+        ax.set_xlabel('Distancia (km)', color='#9a9a9a'); ax.set_ylabel('Altitud (m)', color='#9a9a9a')
+        chart_title(fig, 'Perfil de la ascensión', 'Ida y vuelta por el glaciar del Aneto', '+1.560 m', 'desnivel positivo')
+    elif kind == 'satpass':
+        plt.close(fig)
+        fig = plt.figure(figsize=(w / 100, h / 100), facecolor='#141414'); ax = fig.add_axes([.12, .06, .76, .74], projection='polar'); ax.set_facecolor('#141414')
+        ax.set_theta_zero_location('N'); ax.set_theta_direction(-1); ax.set_rlim(90, 0); ax.tick_params(colors='#9a9a9a'); ax.grid(color='#2a2a2a')
+        az = np.linspace(np.radians(200), np.radians(20), 100); el = 75 * np.sin(np.linspace(0, np.pi, 100))
+        ax.plot(az, el, color=YELLOW, lw=3); ax.plot([az[50]], [el[50]], 'o', color='white', ms=9)
+        ax.text(az[0], el[0] + 8, 'AOS 14:02', color='white', fontsize=11); ax.text(az[-1], el[-1] + 8, 'LOS 14:16', color='white', fontsize=11)
+        chart_title(fig, 'Pase de NOAA-19', 'Acimut y elevación vistos desde Granada', '75°', 'elevación máxima')
     save(fig, name)
+
+
+def waterfall(name, title, sub, w=1100, h=760, seed=9):
+    rng = np.random.default_rng(seed)
+    fig, ax = dark_chart(w, h)
+    T, F = 300, 400; img = rng.normal(0, 1, (T, F)) * .6
+    for t in range(T):
+        f0 = int(200 + 120 * np.tanh((t - 150) / 60)); img[t, max(0, f0 - 4):f0 + 4] += 6
+        img[t, max(0, f0 - 60):f0 - 52] += 2.5; img[t, f0 + 52:f0 + 60] += 2.5
+    ax.imshow(img, aspect='auto', cmap='inferno', extent=[-20, 20, 15, 0]); ax.grid(False)
+    ax.set_xlabel('Desplazamiento de frecuencia (kHz)', color='#9a9a9a'); ax.set_ylabel('Minutos', color='#9a9a9a')
+    chart_title(fig, title, sub, '137,1 MHz', 'NOAA-19 · APT')
+    save(fig, name)
+
+
+def noaa(name, w=1040, h=1250, seed=10):
+    rng = np.random.default_rng(seed)
+    base = np.zeros((h // 4, (w - 120) // 4))
+    for octave in range(6):
+        k = 2 ** octave; n = rng.normal(0, 1, (base.shape[0] // max(1, 64 // k) + 2, base.shape[1] // max(1, 64 // k) + 2))
+        base += np.array(Image.fromarray(n.astype(np.float32)).resize(base.shape[::-1], Image.BICUBIC)) / k
+    base = (base - base.min()) / (base.max() - base.min())
+    yy, xx = np.mgrid[0:base.shape[0], 0:base.shape[1]]
+    land = (np.sin(xx / 22) + np.cos(yy / 30) + rng.normal(0, .05, base.shape) > .9) & (yy > base.shape[0] * .45)
+    img = np.clip((base - .35) * 2.2, 0, 1) * 235 + 20; img[land] = np.maximum(img[land], 95)
+    im = Image.fromarray(img.astype(np.uint8)).resize((w - 120, h), Image.BICUBIC).filter(ImageFilter.GaussianBlur(.6))
+    out = Image.new('L', (w, h), 0); out.paste(im, (60, 0)); d = ImageDraw.Draw(out)
+    for y in range(0, h, 8): d.rectangle([0, y, 50, y + 3], fill=255 if (y // 8) % 2 else 40); d.rectangle([w - 50, y, w, y + 3], fill=int(255 * (y / h)))
+    rgb = Image.merge('RGB', (out, out, out)); dr = ImageDraw.Draw(rgb)
+    f = font(30); dr.rectangle([60, 0, w - 60, 70], fill=(0, 0, 0)); dr.text((80, 18), 'NOAA-19 · canal 4 (infrarrojo) · 14:09', font=f, fill=(253, 243, 60))
+    rgb.save(os.path.join(OUT, name), 'JPEG', quality=86); print('  ', name)
 
 
 # ---------------------------------------------------------------- esquemas
@@ -418,7 +624,7 @@ def avatar(name, initials, c1, c2, size=600):
 
 def banner(name, kind, seed=5, w=2400, h=800):
     rng = np.random.default_rng(seed)
-    fig, ax = canvas(w, h, '#0d1b2e' if kind == 'blue' else '#101315' if kind == 'topo' else '#0c1f16')
+    fig, ax = canvas(w, h, {'blue': '#0d1b2e', 'topo': '#101315', 'topo2': '#0e1520', 'toolpath': '#141210'}.get(kind, '#0c1f16'))
     if kind == 'blue':
         for x in range(0, w, 40): ax.plot([x, x], [0, h], color='#17304f', lw=.8 if x % 200 else 1.6)
         for y in range(0, h, 40): ax.plot([0, w], [y, y], color='#17304f', lw=.8 if y % 200 else 1.6)
@@ -431,6 +637,17 @@ def banner(name, kind, seed=5, w=2400, h=800):
         X, Y = np.meshgrid(np.linspace(0, 24, 600), np.linspace(0, 8, 200)); Z = np.zeros_like(X)
         for _ in range(14): cx, cy, s, a = rng.uniform(0, 24), rng.uniform(0, 8), rng.uniform(1, 3), rng.uniform(.5, 2); Z += a * np.exp(-((X - cx) ** 2 + (Y - cy) ** 2) / (2 * s ** 2))
         ax.contour(X * 100, Y * 100, Z, 30, colors='#ff7a2f', linewidths=1, alpha=.55)
+    elif kind == 'topo2':
+        X, Y = np.meshgrid(np.linspace(0, 24, 600), np.linspace(0, 8, 200)); Z = np.zeros_like(X)
+        for _ in range(10): cx, cy, s, a = rng.uniform(0, 24), rng.uniform(0, 8), rng.uniform(1.5, 4), rng.uniform(1, 3); Z += a * np.exp(-((X - cx) ** 2 + (Y - cy) ** 2) / (2 * s ** 2))
+        ax.contour(X * 100, Y * 100, Z, 34, colors='#6cc4ff', linewidths=1, alpha=.5)
+        ax.contour(X * 100, Y * 100, Z, [Z.max() * .85], colors='#ffffff', linewidths=2, alpha=.8)
+    elif kind == 'toolpath':
+        for k in range(0, 60):
+            y = 60 + k * 12; xs = [300 + (0 if k % 2 else 900), 300 + (900 if k % 2 else 0)]
+            if y < 760: ax.plot(xs, [y, y], color='#c9a227', lw=1.2, alpha=.55)
+        for r in range(20, 360, 18): ax.add_patch(Circle((1800, 400), r, fill=False, ec='#ff7a2f', lw=1.2, alpha=.5))
+        ax.add_patch(Rectangle((280, 40), 940, 720, fill=False, ec='#e8e8e8', lw=2, alpha=.5))
     else:
         rnd = random.Random(seed)
         for _ in range(160):
@@ -481,4 +698,46 @@ if __name__ == '__main__':
     chart('irene_meteo.jpg', 'weather', 1100, 760, 37)
     chart('irene_solar.jpg', 'solar', 1100, 760, 38)
     render('irene_caja_render.jpg', 'enclosure', 1000, 1000, ('#2a3330', '#0d100f'), 25, -50)
+    # --- terceros proyectos de Lucía, Marc e Irene
+    blueprint('lucia_ala_plano.jpg', 'wing', 'Ala volante 1.200', 'L. Fernández', 1200, 900, 41)
+    chart('lucia_ala_perfil.jpg', 'airfoil', 1100, 700, 42)
+    render('lucia_ala_render.jpg', 'wing', 1100, 900, ('#26303a', '#0c0f12'), 35, -70)
+    chart('lucia_ala_vuelo.jpg', 'speed', 1100, 760, 43)
+    chart('marc_maraton_plan.jpg', 'marathon_weeks', 1100, 760, 51)
+    route('marc_maraton_ruta.jpg', 'Maratón de Valencia', '42,2 km', '+38 m', '2 h 58 min', 52, color=YELLOW)
+    stat_card('marc_maraton_resultado.jpg', 'Maratón de Valencia', 'Primera vez por debajo de 3 horas', [('2:58:41', 'Tiempo oficial'), ('4:14 /km', 'Ritmo medio'), ('1:28:50', 'Media maratón'), ('1:29:51', 'Segunda mitad')])
+    blueprint('irene_linebot_plano.jpg', 'linebot', 'Velocista seguidor de línea', 'I. Navarro', 1200, 900, 61)
+    pcb('irene_linebot_pcb.jpg', [(380, 330, 160, 160, 'STM32G4'), (620, 380, 120, 70, 'DRV8833'), (200, 220, 120, 60, 'MP1584'), (620, 220, 140, 60, 'QTR-8A')], 'Velocista · placa principal', 1100, 800, 62, '#7a1f2b')
+    render('irene_linebot_render.jpg', 'linebot', 1000, 900, ('#2d2a33', '#0f0e12'), 30, -60)
+    chart('irene_linebot_tiempos.jpg', 'laps', 1100, 760, 63)
+    # --- Pablo Ortega: fabricación digital
+    avatar('pablo_avatar.jpg', 'PO', '#f7971e', '#b35a00'); banner('pablo_banner.jpg', 'toolpath', 71)
+    blueprint('pablo_cnc_plano.jpg', 'cnc', 'Fresadora CNC 3040', 'P. Ortega', 1200, 900, 72)
+    render('pablo_cnc_render.jpg', 'cnc', 1000, 1000, ('#2a2d33', '#0e0f12'), 24, -55)
+    kit('pablo_cnc_kit.jpg', 'Kit de la fresadora', [('NEMA 23', 'motor', '#3a3f47', '× 3'), ('Husillo 800 W', 'circle', '#c0c0c0', '× 1'), ('Guías HGR15', 'rod', '#d0d0d0', '× 6'), ('Husillos SFU1605', 'rod', '#9aa0a6', '× 3'), ('Controladora GRBL', 'board', '#1b4d8c', '× 1'), ('Fuente 48 V', 'rect', '#555', '× 1')], 1000, 1250, 73)
+    chart('pablo_cnc_precision.jpg', 'accuracy', 1100, 760, 74)
+    schematic('pablo_cnc_esquema.jpg', 'Electrónica de la fresadora', [(80, 330, 220, 190, 'DM542 ×3', ['PUL', 'DIR', 'ENA', 'ALM']), (80, 90, 220, 180, 'GRBL 1.1', ['X', 'Y', 'Z'])])
+    blueprint('pablo_bici_plano.jpg', 'bike', 'Cuadro de bambú', 'P. Ortega', 1200, 900, 75)
+    kit('pablo_bici_kit.jpg', 'Materiales del cuadro', [('Bambú Tonkin', 'rod', '#d9c27a', '× 6'), ('Fibra de lino', 'rect', '#cdbb94', '2 m²'), ('Epoxi', 'circle', '#e8e1c9', '1,5 kg'), ('Pedalier BSA', 'circle', '#9aa0a6', '× 1'), ('Tubo de dirección', 'rod', '#9aa0a6', '× 1'), ('Punteras de acero', 'rect', '#555', '× 2')], 1000, 1250, 76)
+    chart('pablo_bici_ensayo.jpg', 'stiffness', 1100, 760, 77)
+    route('pablo_bici_ruta.jpg', 'Primera salida · Urdaibai', '64,8 km', '+890 m', '2 h 47 min', 78, color='#d9c27a')
+    blueprint('pablo_corexy_plano.jpg', 'corexy', 'Impresora CoreXY', 'P. Ortega', 1200, 1000, 79)
+    render('pablo_corexy_render.jpg', 'corexy', 1000, 1100, ('#2a2d33', '#0e0f12'), 18, -50)
+    pcb('pablo_corexy_pcb.jpg', [(380, 330, 170, 170, 'STM32H723'), (640, 380, 110, 70, 'TMC5160'), (640, 230, 110, 70, 'TMC2240'), (200, 220, 120, 60, 'USB-C')], 'Placa de control · Klipper', 1100, 800, 80, '#1d1d1d')
+    chart('pablo_corexy_calibracion.jpg', 'resonance', 1100, 760, 81)
+    # --- Sara Domínguez: telecomunicaciones y montaña
+    avatar('sara_avatar.jpg', 'SD', '#8e2de2', '#4a00e0'); banner('sara_banner.jpg', 'topo2', 91)
+    blueprint('sara_finger_plano.jpg', 'fingerboard', 'Fingerboard inteligente', 'S. Domínguez', 1200, 900, 92)
+    pcb('sara_finger_pcb.jpg', [(380, 330, 160, 160, 'ESP32-S3'), (620, 400, 100, 60, 'HX711'), (620, 300, 100, 60, 'HX711'), (620, 200, 100, 60, 'HX711'), (200, 220, 120, 60, 'BQ24074')], 'Fingerboard · lectura de 4 células', 1100, 800, 93, '#2b1d5c')
+    schematic('sara_finger_esquema.jpg', 'Células de carga ×4', [(80, 330, 220, 190, 'HX711 ×4', ['DT1', 'DT2', 'DT3', 'DT4']), (80, 90, 220, 180, 'ESP32-S3', ['GPIO4', 'GPIO5', 'BLE'])])
+    chart('sara_finger_fuerza.jpg', 'force', 1100, 760, 94)
+    chart('sara_finger_progreso.jpg', 'strength_weeks', 1100, 760, 95)
+    blueprint('sara_yagi_plano.jpg', 'yagi', 'Antena Yagi 137 MHz', 'S. Domínguez', 1200, 900, 96)
+    chart('sara_noaa_pase.jpg', 'satpass', 1000, 1000, 97)
+    waterfall('sara_noaa_espectro.jpg', 'Señal recibida durante el pase', 'Se ve el efecto Doppler: la frecuencia baja al alejarse el satélite')
+    noaa('sara_noaa_imagen.jpg')
+    route('sara_aneto_ruta.jpg', 'Aneto por el glaciar', '16,4 km', '+1.560 m', '9 h 12 min', 98, color='#6cc4ff')
+    stat_card('sara_aneto_resumen.jpg', 'Cima del Aneto · 3.404 m', 'El techo de los Pirineos', [('9:12 h', 'Tiempo total'), ('+1.560 m', 'Desnivel'), ('-8 °C', 'Temperatura en cima'), ('16,4 km', 'Distancia')], accent='#6cc4ff')
+    kit('sara_aneto_kit.jpg', 'Material para el glaciar', [('Piolet', 'rod', '#9aa0a6', '× 1'), ('Crampones', 'rect', '#c0c0c0', '× 1'), ('Casco', 'circle', '#ff8a5b', '× 1'), ('Arnés', 'circle', YELLOW, '× 1'), ('Cuerda 30 m', 'circle', '#6cc4ff', '× 1'), ('GPS + baliza', 'board', '#1d1d1d', '× 1')], 1000, 1250, 99)
+    chart('sara_aneto_perfil.jpg', 'climb', 1100, 760, 100)
     print('Listo')
