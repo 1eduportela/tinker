@@ -100,6 +100,23 @@ CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_id, read_at);
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!userCols.includes('banner')) db.exec('ALTER TABLE users ADD COLUMN banner TEXT');
 if (!userCols.includes('about')) db.exec("ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''");
+const projectCols = db.prepare('PRAGMA table_info(projects)').all().map(c => c.name);
+if (!projectCols.includes('readme')) db.exec("ALTER TABLE projects ADD COLUMN readme TEXT NOT NULL DEFAULT ''");
+const postCols = db.prepare('PRAGMA table_info(posts)').all().map(c => c.name);
+if (!postCols.includes('title')) db.exec("ALTER TABLE posts ADD COLUMN title TEXT NOT NULL DEFAULT ''");
+if (!postCols.includes('project_id')) db.exec('ALTER TABLE posts ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE');
+db.exec('CREATE INDEX IF NOT EXISTS idx_posts_project ON posts(project_id)');
+
+// Toda publicacion pertenece a un proyecto: las antiguas van a "Publicaciones sueltas"
+for (const { user_id } of db.prepare('SELECT DISTINCT user_id FROM posts WHERE project_id IS NULL').all()) {
+  const info = db.prepare('INSERT INTO projects (user_id, name, description, created_at) VALUES (?, ?, ?, ?)')
+    .run(user_id, 'Publicaciones sueltas', 'Publicaciones de antes de que existieran los proyectos.', Date.now());
+  db.prepare('UPDATE posts SET project_id = ? WHERE user_id = ? AND project_id IS NULL').run(Number(info.lastInsertRowid), user_id);
+}
+for (const r of db.prepare("SELECT id, text FROM posts WHERE title = '' AND text != ''").all()) {
+  const first = r.text.split('\n')[0].trim();
+  db.prepare('UPDATE posts SET title = ? WHERE id = ?').run(first.length > 80 ? first.slice(0, 77) + '...' : first, r.id);
+}
 
 // ---------- Utilidades ----------
 function hashPassword(pw, salt) {
@@ -177,15 +194,16 @@ function unreadCount(userId) {
 }
 
 const POST_SELECT = `
-  SELECT p.id, p.user_id, p.text, p.image, p.created_at,
+  SELECT p.id, p.user_id, p.title, p.text, p.image, p.created_at, p.project_id, pr.name AS project_name,
          u.username, u.display_name, u.avatar,
          (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS likes,
          (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments,
          EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = ?) AS liked
-  FROM posts p JOIN users u ON u.id = p.user_id`;
+  FROM posts p JOIN users u ON u.id = p.user_id LEFT JOIN projects pr ON pr.id = p.project_id`;
 function mapPost(r, me) {
   return {
-    id: r.id, text: r.text, image: r.image, createdAt: r.created_at,
+    id: r.id, title: r.title, text: r.text, image: r.image, createdAt: r.created_at,
+    project: r.project_id ? { id: r.project_id, name: r.project_name } : null,
     author: { username: r.username, displayName: r.display_name, avatar: r.avatar },
     likes: r.likes, comments: r.comments, liked: !!r.liked, mine: r.user_id === me.id,
   };
@@ -275,10 +293,16 @@ route('GET', '/api/feed', async (req, res, url) => {
 route('POST', '/api/posts', async (req, res) => {
   const me = requireUser(req);
   const b = await readBody(req);
-  const text = str(b.text, 1000, 'El texto');
-  const image = b.image ? saveImage(b.image) : null;
-  if (!text && !image) throw new HttpError(400, 'Escribe algo o anade una foto');
-  const info = db.prepare('INSERT INTO posts (user_id, text, image, created_at) VALUES (?, ?, ?, ?)').run(me.id, text, image, Date.now());
+  const title = str(b.title, 100, 'El titulo');
+  const text = str(b.text, 2000, 'La descripcion');
+  if (!title) throw new HttpError(400, 'Ponle un titulo a la publicacion');
+  if (!b.image) throw new HttpError(400, 'Anade una foto');
+  const project = db.prepare('SELECT id, user_id FROM projects WHERE id = ?').get(Number(b.projectId));
+  if (!project) throw new HttpError(400, 'Elige el proyecto de esta publicacion');
+  if (project.user_id !== me.id) throw new HttpError(403, 'Solo puedes publicar en tus proyectos');
+  const image = saveImage(b.image);
+  const info = db.prepare('INSERT INTO posts (user_id, project_id, title, text, image, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(me.id, project.id, title, text, image, Date.now());
   send(res, 200, { post: getPost(Number(info.lastInsertRowid), me) });
 });
 
@@ -352,13 +376,33 @@ route('POST', '/api/users/([A-Za-z0-9_]+)/follow', async (req, res, url, [userna
   send(res, 200, { following: del.changes === 0 });
 });
 
-// ---------- Proyectos (carpetas) ----------
-const mapProject = (r, me) => ({ id: r.id, name: r.name, description: r.description, createdAt: r.created_at, mine: r.user_id === me.id });
+// ---------- Proyectos ----------
+const PROJECT_SELECT = `
+  SELECT pr.*, u.username, u.display_name, u.avatar,
+    (SELECT COUNT(*) FROM posts p WHERE p.project_id = pr.id) AS post_count,
+    (SELECT image FROM posts p WHERE p.project_id = pr.id AND p.image IS NOT NULL ORDER BY p.id DESC LIMIT 1) AS cover
+  FROM projects pr JOIN users u ON u.id = pr.user_id`;
+const mapProject = (r, me, full) => ({
+  id: r.id, name: r.name, description: r.description, createdAt: r.created_at, mine: r.user_id === me.id,
+  postCount: r.post_count || 0, cover: r.cover || null,
+  owner: { username: r.username, displayName: r.display_name, avatar: r.avatar },
+  ...(full ? { readme: r.readme } : {}),
+});
+function projectById(id) {
+  const r = db.prepare(PROJECT_SELECT + ' WHERE pr.id = ?').get(Number(id));
+  if (!r) throw new HttpError(404, 'Ese proyecto no existe');
+  return r;
+}
+function ownProject(id, me) {
+  const r = projectById(id);
+  if (r.user_id !== me.id) throw new HttpError(403, 'Este proyecto no es tuyo');
+  return r;
+}
 
 route('GET', '/api/users/([A-Za-z0-9_]+)/projects', async (req, res, url, [username]) => {
   const me = requireUser(req);
   const u = userByName(username);
-  const rows = db.prepare('SELECT * FROM projects WHERE user_id = ? ORDER BY id DESC').all(u.id);
+  const rows = db.prepare(PROJECT_SELECT + ' WHERE pr.user_id = ? ORDER BY pr.id DESC').all(u.id);
   send(res, 200, { projects: rows.map(r => mapProject(r, me)) });
 });
 
@@ -368,17 +412,43 @@ route('POST', '/api/projects', async (req, res) => {
   const name = str(b.name, 60, 'El nombre');
   const description = str(b.description, 300, 'La descripcion');
   if (!name) throw new HttpError(400, 'Ponle un nombre al proyecto');
-  const info = db.prepare('INSERT INTO projects (user_id, name, description, created_at) VALUES (?, ?, ?, ?)')
-    .run(me.id, name, description, Date.now());
-  send(res, 200, { project: mapProject(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(info.lastInsertRowid)), me) });
+  const readme = `# ${name}\n\n${description || 'Cuenta aquí de qué va tu proyecto.'}\n`;
+  const info = db.prepare('INSERT INTO projects (user_id, name, description, readme, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(me.id, name, description, readme, Date.now());
+  send(res, 200, { project: mapProject(projectById(Number(info.lastInsertRowid)), me, true) });
+});
+
+route('GET', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
+  const me = requireUser(req);
+  send(res, 200, { project: mapProject(projectById(id), me, true) });
+});
+
+route('PUT', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
+  const me = requireUser(req);
+  const p = ownProject(id, me);
+  const b = await readBody(req);
+  const name = b.name === undefined ? p.name : str(b.name, 60, 'El nombre');
+  if (!name) throw new HttpError(400, 'Ponle un nombre al proyecto');
+  const description = b.description === undefined ? p.description : str(b.description, 300, 'La descripcion');
+  const readme = b.readme === undefined ? p.readme : str(b.readme, 50000, 'El README');
+  db.prepare('UPDATE projects SET name = ?, description = ?, readme = ? WHERE id = ?').run(name, description, readme, p.id);
+  send(res, 200, { project: mapProject(projectById(p.id), me, true) });
+});
+
+route('GET', '/api/projects/(\\d+)/posts', async (req, res, url, [id]) => {
+  const me = requireUser(req);
+  const p = projectById(id);
+  const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
+  const rows = db.prepare(POST_SELECT + ' WHERE p.id < ? AND p.project_id = ? ORDER BY p.id DESC LIMIT 20').all(me.id, before, p.id);
+  send(res, 200, { posts: rows.map(r => mapPost(r, me)) });
 });
 
 route('DELETE', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
   const me = requireUser(req);
-  const p = db.prepare('SELECT user_id FROM projects WHERE id = ?').get(Number(id));
-  if (!p) throw new HttpError(404, 'Proyecto no encontrado');
-  if (p.user_id !== me.id) throw new HttpError(403, 'Solo puedes borrar tus proyectos');
-  db.prepare('DELETE FROM projects WHERE id = ?').run(Number(id));
+  const p = ownProject(id, me);
+  const images = db.prepare('SELECT image FROM posts WHERE project_id = ? AND image IS NOT NULL').all(p.id).map(r => r.image);
+  db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
+  for (const img of images) fs.rm(path.join(UPLOADS, path.basename(img)), () => {});
   send(res, 200, { ok: true });
 });
 
@@ -429,7 +499,8 @@ function serveFile(res, baseDir, rel) {
   if (!file.startsWith(baseDir + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('No encontrado'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      'X-Content-Type-Options': 'nosniff' });
     res.end(data);
   });
 }

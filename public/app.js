@@ -171,21 +171,39 @@ function openPost(post, onChange, onDelete) {
           try { await api('DELETE', `/api/posts/${post.id}`); m.close(); onDelete(); toast('Publicación borrada'); }
           catch (e) { toast(e.message); }
         } }, icon('trash'))),
-      post.image && post.text && h('p', { class: 'pm-text' }, post.text),
+      h('div', { class: 'pm-body' },
+        post.title && h('h2', { class: 'pm-title' }, post.title),
+        post.image && post.text && h('p', { class: 'pm-text' }, post.text),
+        post.project && h('a', { href: `#/p/${post.project.id}/multimedia`, class: 'proj-btn' },
+          icon('folder'), h('span', {}, post.project.name), h('span', { class: 'arrow' }, '→'))),
       list,
       h('div', { class: 'row pm-actions' }, likeBtn),
       form)), 'wide');
   loadComments().catch(e => list.replaceChildren(h('div', { class: 'muted' }, e.message)));
 }
 
-function openComposer(onPost) {
+async function openComposer(onPost, presetProjectId) {
+  let projects;
+  try { projects = (await api('GET', `/api/users/${encodeURIComponent(me.username)}/projects`)).projects; }
+  catch (e) { return toast(e.message); }
+  if (!projects.length) {
+    const m = modal(h('div', {},
+      h('h2', {}, 'Primero, un proyecto'),
+      h('p', { class: 'muted' }, 'En Tinker cada publicación pertenece a un proyecto. Crea uno y luego sube tu foto.'),
+      h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { class: 'spacer' }),
+        h('button', { class: 'btn', onclick: () => { m.close(); openNewProject(p => openComposer(onPost, p.id)); } }, 'Crear proyecto'))));
+    return;
+  }
   let image = null;
-  const text = h('textarea', { rows: 4, maxlength: 1000, placeholder: 'Cuenta tu proyecto: qué es, cómo lo hiciste, qué aprendiste…' });
+  const select = h('select', { class: 'select' },
+    ...projects.map(p => h('option', { value: p.id, selected: String(p.id) === String(presetProjectId) }, p.name)));
+  const title = h('input', { type: 'text', maxlength: 100, placeholder: 'Ej.: Primer prototipo del brazo funcionando' });
+  const text = h('textarea', { rows: 4, maxlength: 2000, placeholder: 'Cuéntalo: qué se ve, cómo lo hiciste, qué aprendiste…' });
   const drop = h('div', { class: 'drop' });
   const paint = () => drop.replaceChildren(image
     ? h('div', { class: 'drop-preview' }, h('img', { src: image }),
         h('button', { class: 'icon-btn', title: 'Quitar foto', onclick: e => { e.stopPropagation(); image = null; paint(); } }, icon('x')))
-    : h('div', { class: 'drop-empty' }, icon('image'), h('div', {}, 'Haz clic o arrastra aquí una foto')));
+    : h('div', { class: 'drop-empty' }, icon('image'), h('div', {}, 'Haz clic o arrastra aquí la foto')));
   paint();
   drop.onclick = () => { if (!image) pickImage(d => { image = d; paint(); }); };
   drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
@@ -197,17 +215,22 @@ function openComposer(onPost) {
   };
   const btn = h('button', { class: 'btn' }, 'Publicar');
   btn.onclick = async () => {
-    if (!text.value.trim() && !image) return toast('Añade una foto o escribe algo');
+    if (!image) return toast('Añade una foto');
+    if (!title.value.trim()) return toast('Ponle un título');
     btn.disabled = true;
     try {
-      const { post } = await api('POST', '/api/posts', { text: text.value, image });
+      const { post } = await api('POST', '/api/posts', { projectId: Number(select.value), title: title.value, text: text.value, image });
       m.close(); toast('¡Publicado!'); onPost && onPost(post);
     } catch (e) { toast(e.message); }
     btn.disabled = false;
   };
   const m = modal(h('div', { class: 'composer' },
-    h('h2', {}, 'Nueva publicación'), h('div', { class: 'muted' }, 'Lo más visual posible: una buena foto vale más que mil palabras.'),
-    drop, text, h('div', { class: 'row' }, h('div', { class: 'spacer' }), btn)));
+    h('h2', {}, 'Nueva publicación'), h('div', { class: 'muted' }, 'Una foto de tu proyecto, con su título y descripción.'),
+    drop,
+    h('label', {}, 'Proyecto'), select,
+    h('label', {}, 'Título'), title,
+    h('label', {}, 'Descripción'), text,
+    h('div', { class: 'row' }, h('div', { class: 'spacer' }), btn)));
 }
 
 function openEditProfile() {
@@ -333,7 +356,7 @@ function tile(post, ctl) {
     post.image
       ? h('img', { src: post.image, alt: '', width: post._w, height: post._h })
       : h('div', { class: 'tile-text', style: `--c:${colorFor(post.author.username)}` }, post.text),
-    post.image && post.text && h('p', { class: 'tile-caption' }, post.text),
+    post.image && (post.title || post.text) && h('p', { class: 'tile-caption' }, post.title || post.text),
     meta);
   t.onclick = () => openPost(post, paintMeta, () => ctl.remove(t));
   return t;
@@ -445,10 +468,10 @@ const SECTIONS = [
   { key: 'contacto', label: 'Contacto', ic: 'message' },
 ];
 
-function sectionDropdown(current, onPick) {
-  const cur = SECTIONS.find(s => s.key === current);
+function sectionDropdown(current, onPick, sections = SECTIONS) {
+  const cur = sections.find(s => s.key === current);
   const menu = h('div', { class: 'dd-menu', hidden: true },
-    ...SECTIONS.map(s => h('button', { class: 'dd-item' + (s.key === current ? ' active' : ''),
+    ...sections.map(s => h('button', { class: 'dd-item' + (s.key === current ? ' active' : ''),
       onclick: () => { menu.hidden = true; if (s.key !== current) onPick(s.key); } }, icon(s.ic), s.label)));
   const btn = h('button', { class: 'dd-btn', onclick: e => { e.stopPropagation(); menu.hidden = !menu.hidden; } },
     icon(cur.ic), h('span', {}, cur.label), h('span', { class: 'chev' }, icon('chevron')));
@@ -526,15 +549,15 @@ async function projectsView(user) {
   const { projects } = await api('GET', `/api/users/${encodeURIComponent(user.username)}/projects`);
   const wrap = h('div', { class: 'folders' });
   const paint = () => wrap.replaceChildren(...[
-    ...projects.map(p => h('div', { class: 'folder', title: p.name,
-      onclick: () => toast('Muy pronto: aquí dentro irá el contenido del proyecto') },
-      h('span', { class: 'f-icon' }, icon('folder')),
+    ...projects.map(p => h('a', { class: 'folder', title: p.name, href: `#/p/${p.id}` },
+      p.cover ? h('span', { class: 'f-cover', style: `background-image:url("${p.cover}")` })
+        : h('span', { class: 'f-icon' }, icon('folder')),
       h('b', { class: 'f-name' }, p.name),
       p.description && h('p', { class: 'f-desc' }, p.description),
-      h('small', { class: 'f-date' }, 'Creado ' + timeAgo(p.createdAt)),
+      h('small', { class: 'f-date' }, `${p.postCount} publicaci${p.postCount === 1 ? 'ón' : 'ones'} · ${timeAgo(p.createdAt)}`),
       p.mine && h('button', { class: 'icon-btn f-del', title: 'Borrar proyecto', onclick: async e => {
-        e.stopPropagation();
-        if (!confirm(`¿Borrar el proyecto "${p.name}"?`)) return;
+        e.stopPropagation(); e.preventDefault();
+        if (!confirm(`¿Borrar el proyecto "${p.name}"? Se borrarán también sus ${p.postCount} publicaciones.`)) return;
         try { await api('DELETE', `/api/projects/${p.id}`); projects.splice(projects.indexOf(p), 1); paint(); toast('Proyecto borrado'); }
         catch (err) { toast(err.message); }
       } }, icon('trash')))),
@@ -546,6 +569,80 @@ async function projectsView(user) {
   ].filter(Boolean));
   paint();
   return wrap;
+}
+
+// =============== Proyecto ===============
+const PROJECT_SECTIONS = [
+  { key: 'multimedia', label: 'Multimedia', ic: 'image' },
+];
+
+function openEditProject(project, onSave) {
+  const name = h('input', { type: 'text', maxlength: 60, value: project.name });
+  const desc = h('textarea', { rows: 3, maxlength: 300 }, project.description);
+  const btn = h('button', { class: 'btn' }, 'Guardar');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const r = await api('PUT', `/api/projects/${project.id}`, { name: name.value, description: desc.value });
+      m.close(); toast('Proyecto guardado'); onSave && onSave(r.project);
+    } catch (e) { toast(e.message); }
+    btn.disabled = false;
+  };
+  const m = modal(h('div', {},
+    h('h2', {}, 'Editar proyecto'),
+    h('label', {}, 'Nombre'), name, h('label', {}, 'Descripción corta'), desc,
+    h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { class: 'spacer' }), btn)));
+}
+
+async function projectPage(id, section) {
+  const { project } = await api('GET', `/api/projects/${encodeURIComponent(id)}`);
+  if (!PROJECT_SECTIONS.some(s => s.key === section)) section = PROJECT_SECTIONS[0].key;
+  const base = `#/p/${project.id}`;
+  const owner = project.owner;
+
+  const head = h('header', { class: 'proj-head' },
+    h('span', { class: 'proj-icon' }, icon('folder')),
+    h('div', { style: 'min-width:0' },
+      h('div', { class: 'proj-path' },
+        h('a', { href: `#/u/${owner.username}/proyectos`, class: 'proj-owner' }, avatar(owner, 'xs'), owner.displayName),
+        h('span', { class: 'slash' }, '/'),
+        h('b', {}, project.name)),
+      project.description && h('p', { class: 'proj-desc' }, project.description),
+      h('div', { class: 'proj-stats' },
+        h('span', {}, icon('image'), `${project.postCount} publicaci${project.postCount === 1 ? 'ón' : 'ones'}`),
+        h('span', {}, 'Creado ' + timeAgo(project.createdAt)))));
+  const body = h('div', { class: 'section-body' });
+  shell.content.replaceChildren(head,
+    h('div', { class: 'toolbar' }, sectionDropdown(section, k => { location.hash = `${base}/${k}`; }, PROJECT_SECTIONS)),
+    body);
+
+  let grid = null;
+  if (project.mine) {
+    shell.context.replaceChildren(
+      ...ctxSection('Proyecto', 'Tu proyecto. Todo lo que publiques aquí sale en Multimedia.'),
+      ctxButton('plus', 'Nueva publicación', () => openComposer(p => {
+        if (p.project && p.project.id === project.id && grid) grid.prepend(p); else if (p.project) location.hash = `#/p/${p.project.id}/multimedia`;
+      }, project.id), true),
+      ctxButton('edit', 'Editar proyecto', () => openEditProject(project, () => render())),
+      ctxButton('trash', 'Borrar proyecto', async () => {
+        if (!confirm(`¿Borrar el proyecto "${project.name}"? Se borrarán también sus publicaciones.`)) return;
+        try { await api('DELETE', `/api/projects/${project.id}`); toast('Proyecto borrado'); location.hash = `#/u/${me.username}/proyectos`; }
+        catch (e) { toast(e.message); }
+      }));
+  } else {
+    shell.context.replaceChildren(
+      ...ctxSection('Proyecto', `Un proyecto de ${owner.displayName}.`),
+      ctxButton('user', `Perfil de ${owner.displayName}`, () => { location.hash = `#/u/${owner.username}`; }),
+      ctxButton('message', 'Enviar mensaje', () => { location.hash = `#/u/${owner.username}/contacto`; }));
+  }
+
+  if (section === 'multimedia') {
+    grid = masonry(async before =>
+      (await api('GET', `/api/projects/${project.id}/posts${before ? `?before=${before}` : ''}`)).posts,
+      project.mine ? 'Aún no hay publicaciones en este proyecto. ¡Sube la primera foto!' : 'Aún no hay publicaciones en este proyecto.');
+    body.append(grid.el);
+  }
+  return project;
 }
 
 // =============== Chat ===============
@@ -677,6 +774,10 @@ async function render() {
       const [u, sec] = hash.slice(4).split('/').map(decodeURIComponent);
       key = u.toLowerCase() === me.username.toLowerCase() ? 'perfil' : '';
       await profilePage(u, sec);
+    } else if (hash.startsWith('#/p/')) {
+      const [id, sec] = hash.slice(4).split('/').map(decodeURIComponent);
+      const project = await projectPage(id, sec);
+      key = project.mine ? 'perfil' : '';
     } else if (hash === '#/personas') { key = 'personas'; await peoplePage(); }
     else feedPage();
   } catch (e) {
