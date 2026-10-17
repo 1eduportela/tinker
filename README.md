@@ -18,3 +18,8 @@ Sin dependencias: solo Node.js (usa el SQLite integrado).
 - **Proyectos** (como en GitHub): archivos, README y Multimedia.
 - **Publicaciones** (como en Instagram): foto, título y descripción. Siempre pertenecen a un proyecto y aparecen en su Multimedia.
 - **Perfil**: banner, Bienvenida, Proyectos y Contacto (chat).
+
+## Perfiles de prueba
+`Crear perfiles de prueba.bat` añade tres perfiles de ejemplo (Lucía, Marc e Irene) con 30 publicaciones,
+6 proyectos, archivos, comentarios y un mensaje. `Borrar perfiles de prueba.bat` los quita.
+Las imágenes se generan con `python3 demo/generar_imagenes.py`.
