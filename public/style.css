@@ -336,6 +336,7 @@ a.btn .ic { width: 17px; height: 17px; }
 .invite-code { font: 700 20px/1.2 ui-monospace, "Cascadia Code", Consolas, monospace; letter-spacing: 2px; background: var(--panel) !important; }
 .tag.used { background: var(--line); color: var(--text); }
 .tag.expired { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+.banner-flag { display: inline-block; margin-top: 6px; background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 3px; }
 .banner-inv { font-size: 12px; opacity: .8; margin-top: 2px; }
 .banner-inv a { color: var(--accent); font-weight: 600; }
 

@@ -138,6 +138,12 @@ if (db.prepare('PRAGMA table_info(sessions)').all().some(c => c.name === 'token'
   db.exec('DROP TABLE sessions; ALTER TABLE sessions_new RENAME TO sessions; COMMIT');
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
+db.exec(`CREATE TABLE IF NOT EXISTS blocks (
+  blocker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (blocker_id, blocked_id)
+)`);
 db.exec(`CREATE TABLE IF NOT EXISTS invites (
   id INTEGER PRIMARY KEY,
   code_hash TEXT UNIQUE NOT NULL,
@@ -153,6 +159,10 @@ const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!userCols.includes('banner')) db.exec('ALTER TABLE users ADD COLUMN banner TEXT');
 if (!userCols.includes('about')) db.exec("ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''");
 if (!userCols.includes('invited_by')) db.exec('ALTER TABLE users ADD COLUMN invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL');
+if (!userCols.includes('is_admin')) db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
+if (!userCols.includes('suspended_at')) db.exec('ALTER TABLE users ADD COLUMN suspended_at INTEGER');
+// La primera cuenta registrada es la de administrador
+if (!db.prepare('SELECT 1 FROM users WHERE is_admin = 1').get()) db.exec('UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)');
 if (!userCols.includes('pass_params')) db.exec("ALTER TABLE users ADD COLUMN pass_params TEXT NOT NULL DEFAULT 'scrypt:16384:8:1'");
 const mediaCols = db.prepare('PRAGMA table_info(media_uploads)').all().map(c => c.name);
 if (!mediaCols.includes('size')) {
@@ -296,6 +306,7 @@ function currentUser(req) {
   const r = db.prepare(`SELECT s.id AS session_id, s.created_at AS session_created, s.last_used, u.*
     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?`).get(id);
   if (!r) return null;
+  if (r.suspended_at) return null;
   const now = Date.now();
   if (now - r.last_used > SESSION_IDLE || now - r.session_created > SESSION_MAX) {
     db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
@@ -340,8 +351,32 @@ function userByName(username) {
   if (!u) throw new HttpError(404, 'Ese usuario no existe');
   return u;
 }
+// Un usuario esta "oculto" para mi si esta suspendido o si alguno de los dos ha bloqueado al otro
+const VISIBLE_AUTHOR = `u.suspended_at IS NULL AND NOT EXISTS (SELECT 1 FROM blocks bl
+  WHERE (bl.blocker_id = ? AND bl.blocked_id = u.id) OR (bl.blocker_id = u.id AND bl.blocked_id = ?))`;
+function blockState(meId, otherId) {
+  const iBlocked = !!db.prepare('SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = ?').get(meId, otherId);
+  const blockedMe = !!db.prepare('SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = ?').get(otherId, meId);
+  return { iBlocked, blockedMe };
+}
+// Usuario por nombre comprobando que lo puedo ver
+function visibleUserByName(username, me) {
+  const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  if (!u) throw new HttpError(404, 'Ese usuario no existe');
+  if (u.id !== me.id) {
+    if (u.suspended_at && !me.is_admin) throw new HttpError(404, 'Ese usuario no existe');
+    if (blockState(me.id, u.id).blockedMe && !me.is_admin) throw new HttpError(404, 'Ese usuario no existe');
+  }
+  return u;
+}
+function requireAdmin(req) {
+  const me = requireUser(req);
+  if (!me.is_admin) throw new HttpError(403, 'Solo para administradores');
+  return me;
+}
 function unreadCount(userId) {
-  return db.prepare('SELECT COUNT(*) AS n FROM messages WHERE to_id = ? AND read_at IS NULL').get(userId).n;
+  return db.prepare(`SELECT COUNT(*) AS n FROM messages m JOIN users u ON u.id = m.from_id
+    WHERE m.to_id = ? AND m.read_at IS NULL AND ${VISIBLE_AUTHOR}`).get(userId, userId, userId).n;
 }
 
 const POST_SELECT = `
@@ -365,7 +400,7 @@ function mapPost(r, me, media) {
     id: r.id, title: r.title, text: r.text, image: r.image, media, createdAt: r.created_at,
     project: r.project_id ? { id: r.project_id, name: r.project_name } : null,
     author: { username: r.username, displayName: r.display_name, avatar: r.avatar },
-    mine: r.user_id === me.id,
+    mine: r.user_id === me.id, canDelete: r.user_id === me.id || !!me.is_admin,
   };
 }
 function getPost(id, me) {
@@ -578,6 +613,7 @@ route('POST', '/api/login', async (req, res) => {
     throw new HttpError(401, left > 0 && left <= 2 ? `Usuario o contrasena incorrectos (te quedan ${left} intento${left === 1 ? '' : 's'})` : 'Usuario o contrasena incorrectos');
   }
   clearKey(userKey);
+  if (u.suspended_at) { securityLog('login_cuenta_suspendida', req, u.username); throw new HttpError(403, 'Esta cuenta esta suspendida. Habla con el administrador.'); }
   securityLog('login', req, u.username);
   login(req, res, u.id);
 });
@@ -590,7 +626,7 @@ route('POST', '/api/logout', async (req, res) => {
 
 route('GET', '/api/me', async (req, res) => {
   const u = currentUser(req);
-  send(res, 200, { user: u ? publicUser(u) : null, unread: u ? unreadCount(u.id) : 0 });
+  send(res, 200, { user: u ? { ...publicUser(u), isAdmin: !!u.is_admin } : null, unread: u ? unreadCount(u.id) : 0 });
 });
 
 route('PUT', '/api/me', async (req, res) => {
@@ -726,9 +762,9 @@ route('GET', '/api/feed', async (req, res, url) => {
   let rows;
   if (mode === 'following') {
     rows = db.prepare(POST_SELECT + ` WHERE p.id < ? AND (p.user_id = ? OR p.user_id IN
-      (SELECT followee_id FROM follows WHERE follower_id = ?)) ORDER BY p.id DESC LIMIT 20`).all(before, me.id, me.id);
+      (SELECT followee_id FROM follows WHERE follower_id = ?)) AND ${VISIBLE_AUTHOR} ORDER BY p.id DESC LIMIT 20`).all(before, me.id, me.id, me.id, me.id);
   } else {
-    rows = db.prepare(POST_SELECT + ' WHERE p.id < ? ORDER BY p.id DESC LIMIT 20').all(before);
+    rows = db.prepare(POST_SELECT + ` WHERE p.id < ? AND ${VISIBLE_AUTHOR} ORDER BY p.id DESC LIMIT 20`).all(before, me.id, me.id);
   }
   send(res, 200, { posts: mapPosts(rows, me) });
 });
@@ -842,9 +878,10 @@ route('DELETE', '/api/posts/(\\d+)', async (req, res, url, [id]) => {
   const me = requireUser(req);
   const p = db.prepare('SELECT user_id, image FROM posts WHERE id = ?').get(Number(id));
   if (!p) throw new HttpError(404, 'Publicacion no encontrada');
-  if (p.user_id !== me.id) throw new HttpError(403, 'Solo puedes borrar tus publicaciones');
+  if (p.user_id !== me.id && !me.is_admin) throw new HttpError(403, 'Solo puedes borrar tus publicaciones');
   const files = postFiles('p.id = ?', Number(id));
   db.prepare('DELETE FROM posts WHERE id = ?').run(Number(id));
+  if (p.user_id !== me.id) securityLog('moderacion_publicacion_borrada', req, `${me.username} borro la publicacion ${id}`);
   removeUploads(files);
   send(res, 200, { ok: true });
 });
@@ -852,19 +889,23 @@ route('DELETE', '/api/posts/(\\d+)', async (req, res, url, [id]) => {
 route('GET', '/api/users', async (req, res) => {
   const me = requireUser(req);
   const rows = db.prepare(`SELECT u.*, EXISTS(SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.followee_id = u.id) AS following
-    FROM users u ORDER BY u.display_name COLLATE NOCASE`).all(me.id);
-  send(res, 200, { users: rows.map(u => ({ ...publicUser(u), following: !!u.following, isMe: u.id === me.id })) });
+    FROM users u WHERE u.id = ? OR NOT EXISTS (SELECT 1 FROM blocks bl WHERE bl.blocker_id = u.id AND bl.blocked_id = ?)
+    ORDER BY u.display_name COLLATE NOCASE`).all(me.id, me.id, me.id)
+    .filter(u => !u.suspended_at || me.is_admin);
+  send(res, 200, { users: rows.map(u => ({ ...publicUser(u), following: !!u.following, isMe: u.id === me.id, suspended: !!u.suspended_at })) });
 });
 
 route('GET', '/api/users/([A-Za-z0-9_]+)', async (req, res, url, [username]) => {
   const me = requireUser(req);
-  const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-  if (!u) throw new HttpError(404, 'Ese usuario no existe');
+  const u = visibleUserByName(username, me);
+  const bs = blockState(me.id, u.id);
   const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
   const posts = db.prepare(POST_SELECT + ' WHERE p.id < ? AND p.user_id = ? ORDER BY p.id DESC LIMIT 20').all(before, u.id);
   const c = (sql) => db.prepare(sql).get(u.id).n;
   send(res, 200, {
     user: { ...publicUser(u), createdAt: u.created_at, isMe: u.id === me.id,
+      blockedByMe: bs.iBlocked, suspended: !!u.suspended_at, isAdmin: !!u.is_admin,
+      canModerate: !!me.is_admin && u.id !== me.id && !u.is_admin,
       invitedBy: u.invited_by ? (db.prepare('SELECT username FROM users WHERE id = ?').get(u.invited_by) || {}).username || null : null,
       following: !!db.prepare('SELECT 1 FROM follows WHERE follower_id = ? AND followee_id = ?').get(me.id, u.id),
       followers: c('SELECT COUNT(*) AS n FROM follows WHERE followee_id = ?'),
@@ -877,12 +918,37 @@ route('GET', '/api/users/([A-Za-z0-9_]+)', async (req, res, url, [username]) => 
 route('POST', '/api/users/([A-Za-z0-9_]+)/follow', async (req, res, url, [username]) => {
   const me = requireUser(req);
   limit('follow:' + me.id, 120, HOUR, 'Demasiados cambios de seguimiento');
-  const u = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-  if (!u) throw new HttpError(404, 'Ese usuario no existe');
+  const u = visibleUserByName(username, me);
   if (u.id === me.id) throw new HttpError(400, 'No puedes seguirte a ti mismo');
+  if (blockState(me.id, u.id).iBlocked) throw new HttpError(400, 'Has bloqueado a esta persona: desbloqueala primero');
   const del = db.prepare('DELETE FROM follows WHERE follower_id = ? AND followee_id = ?').run(me.id, u.id);
   if (del.changes === 0) db.prepare('INSERT INTO follows (follower_id, followee_id) VALUES (?, ?)').run(me.id, u.id);
   send(res, 200, { following: del.changes === 0 });
+});
+
+route('POST', '/api/users/([A-Za-z0-9_]+)/block', async (req, res, url, [username]) => {
+  const me = requireUser(req);
+  limit('block:' + me.id, 60, HOUR, 'Demasiados cambios seguidos');
+  const u = userByName(username);
+  if (u.id === me.id) throw new HttpError(400, 'No puedes bloquearte a ti mismo');
+  const del = db.prepare('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?').run(me.id, u.id);
+  if (del.changes === 0) {
+    db.prepare('INSERT INTO blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)').run(me.id, u.id, Date.now());
+    db.prepare('DELETE FROM follows WHERE (follower_id = ? AND followee_id = ?) OR (follower_id = ? AND followee_id = ?)').run(me.id, u.id, u.id, me.id);
+    securityLog('usuario_bloqueado', req, `${me.username} -> ${u.username}`);
+  }
+  send(res, 200, { blocked: del.changes === 0 });
+});
+
+route('POST', '/api/admin/users/([A-Za-z0-9_]+)/suspend', async (req, res, url, [username]) => {
+  const me = requireAdmin(req);
+  const u = userByName(username);
+  if (u.id === me.id || u.is_admin) throw new HttpError(400, 'No se puede suspender a un administrador');
+  const suspend = !u.suspended_at;
+  db.prepare('UPDATE users SET suspended_at = ? WHERE id = ?').run(suspend ? Date.now() : null, u.id);
+  if (suspend) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  securityLog(suspend ? 'moderacion_cuenta_suspendida' : 'moderacion_cuenta_reactivada', req, `${me.username} -> ${u.username}`);
+  send(res, 200, { suspended: suspend });
 });
 
 // ---------- Proyectos ----------
@@ -896,11 +962,16 @@ const mapProject = (r, me, full) => ({
   id: r.id, name: r.name, description: r.description, createdAt: r.created_at, mine: r.user_id === me.id,
   postCount: r.post_count || 0, fileCount: r.file_count || 0, cover: r.cover || null,
   owner: { username: r.username, displayName: r.display_name, avatar: r.avatar },
+  canDelete: r.user_id === me.id || !!me.is_admin,
   ...(full ? { readme: r.readme } : {}),
 });
-function projectById(id) {
+function projectById(id, me) {
   const r = db.prepare(PROJECT_SELECT + ' WHERE pr.id = ?').get(Number(id));
   if (!r) throw new HttpError(404, 'Ese proyecto no existe');
+  if (me && r.user_id !== me.id && !me.is_admin) {
+    const owner = db.prepare('SELECT suspended_at FROM users WHERE id = ?').get(r.user_id);
+    if (owner.suspended_at || blockState(me.id, r.user_id).blockedMe) throw new HttpError(404, 'Ese proyecto no existe');
+  }
   return r;
 }
 function ownProject(id, me) {
@@ -911,7 +982,7 @@ function ownProject(id, me) {
 
 route('GET', '/api/users/([A-Za-z0-9_]+)/projects', async (req, res, url, [username]) => {
   const me = requireUser(req);
-  const u = userByName(username);
+  const u = visibleUserByName(username, me);
   const rows = db.prepare(PROJECT_SELECT + ' WHERE pr.user_id = ? ORDER BY pr.id DESC').all(u.id);
   send(res, 200, { projects: rows.map(r => mapProject(r, me)) });
 });
@@ -931,7 +1002,7 @@ route('POST', '/api/projects', async (req, res) => {
 
 route('GET', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
   const me = requireUser(req);
-  send(res, 200, { project: mapProject(projectById(id), me, true) });
+  send(res, 200, { project: mapProject(projectById(id, me), me, true) });
 });
 
 route('PUT', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
@@ -949,7 +1020,7 @@ route('PUT', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
 
 route('GET', '/api/projects/(\\d+)/posts', async (req, res, url, [id]) => {
   const me = requireUser(req);
-  const p = projectById(id);
+  const p = projectById(id, me);
   const before = Number(url.searchParams.get('before')) || Number.MAX_SAFE_INTEGER;
   const rows = db.prepare(POST_SELECT + ' WHERE p.id < ? AND p.project_id = ? ORDER BY p.id DESC LIMIT 20').all(before, p.id);
   send(res, 200, { posts: mapPosts(rows, me) });
@@ -957,7 +1028,8 @@ route('GET', '/api/projects/(\\d+)/posts', async (req, res, url, [id]) => {
 
 route('DELETE', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
   const me = requireUser(req);
-  const p = ownProject(id, me);
+  const p = me.is_admin ? projectById(id) : ownProject(id, me);
+  if (p.user_id !== me.id) securityLog('moderacion_proyecto_borrado', req, `${me.username} borro el proyecto ${id} de ${p.username}`);
   const images = postFiles('p.project_id = ?', p.id);
   const stored = db.prepare('SELECT stored FROM project_files WHERE project_id = ?').all(p.id).map(r => r.stored);
   db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
@@ -970,8 +1042,8 @@ route('DELETE', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
 const mapFile = r => ({ id: r.id, path: r.path, size: r.size, createdAt: r.created_at });
 
 route('GET', '/api/projects/(\\d+)/files', async (req, res, url, [id]) => {
-  requireUser(req);
-  const p = projectById(id);
+  const me = requireUser(req);
+  const p = projectById(id, me);
   const rows = db.prepare('SELECT * FROM project_files WHERE project_id = ? ORDER BY path').all(p.id);
   send(res, 200, { files: rows.map(mapFile) });
 });
@@ -1019,9 +1091,10 @@ route('DELETE', '/api/projects/(\\d+)/files', async (req, res, url, [id]) => {
 const INLINE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.webp': 'image/webp', '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg' };
 route('GET', '/api/files/(\\d+)', async (req, res, url, [id]) => {
-  requireUser(req);
+  const me = requireUser(req);
   const f = db.prepare('SELECT * FROM project_files WHERE id = ?').get(Number(id));
   if (!f) throw new HttpError(404, 'Archivo no encontrado');
+  projectById(f.project_id, me);
   const name = f.path.split('/').pop();
   const ext = path.extname(name).toLowerCase();
   const mode = url.searchParams.get('as');
@@ -1043,7 +1116,7 @@ route('GET', '/api/files/(\\d+)', async (req, res, url, [id]) => {
 // ---------- Mensajes (chat) ----------
 route('GET', '/api/messages/([A-Za-z0-9_]+)', async (req, res, url, [username]) => {
   const me = requireUser(req);
-  const u = userByName(username);
+  const u = visibleUserByName(username, me);
   const after = Number(url.searchParams.get('after')) || 0;
   const rows = db.prepare(`SELECT id, from_id, text, created_at FROM messages
     WHERE id > ? AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))
@@ -1056,8 +1129,12 @@ route('GET', '/api/messages/([A-Za-z0-9_]+)', async (req, res, url, [username]) 
 
 route('POST', '/api/messages/([A-Za-z0-9_]+)', async (req, res, url, [username]) => {
   const me = requireUser(req);
-  const u = userByName(username);
+  const u = visibleUserByName(username, me);
   if (u.id === me.id) throw new HttpError(400, 'No puedes escribirte a ti mismo');
+  if (u.suspended_at) throw new HttpError(403, 'Esta cuenta esta suspendida');
+  const bs = blockState(me.id, u.id);
+  if (bs.iBlocked) throw new HttpError(403, 'Has bloqueado a esta persona: desbloqueala para escribirle');
+  if (bs.blockedMe) throw new HttpError(403, 'No puedes escribir a esta persona');
   limit('msg:' + me.id, 30, MIN, 'Estas enviando mensajes demasiado rapido');
   limit('msgday:' + me.id, 1000, DAY, 'Has llegado al limite de mensajes de hoy');
   const b = await readBody(req);
@@ -1075,8 +1152,8 @@ route('GET', '/api/conversations', async (req, res) => {
     FROM users u
     JOIN messages m ON m.id = (SELECT MAX(id) FROM messages
       WHERE (from_id = u.id AND to_id = ?) OR (from_id = ? AND to_id = u.id))
-    WHERE u.id != ?
-    ORDER BY m.id DESC`).all(me.id, me.id, me.id, me.id);
+    WHERE u.id != ? AND ${VISIBLE_AUTHOR}
+    ORDER BY m.id DESC`).all(me.id, me.id, me.id, me.id, me.id, me.id);
   send(res, 200, { conversations: rows.map(r => ({ user: publicUser(r), unread: r.unread,
     last: { text: r.last_text, createdAt: r.last_at, mine: r.last_from === me.id } })) });
 });

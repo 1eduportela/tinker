@@ -33,6 +33,8 @@ const ICONS = {
   monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
   mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  ban: '<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>',
+  flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
   x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
 };
 function icon(name) {
@@ -264,8 +266,8 @@ function openPost(post, onDelete) {
             h('time', { title: new Date(post.createdAt).toLocaleString('es-ES') },
               new Date(post.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })))),
         h('div', { class: 'spacer' }),
-        post.mine && h('button', { class: 'icon-btn', title: 'Borrar publicación', onclick: async () => {
-          if (!confirm('¿Borrar esta publicación?')) return;
+        (post.mine || post.canDelete) && h('button', { class: 'icon-btn', title: post.mine ? 'Borrar publicación' : 'Borrar publicación (moderación)', onclick: async () => {
+          if (!confirm(post.mine ? '¿Borrar esta publicación?' : `Vas a borrar una publicación de @${post.author.username} como administrador. ¿Seguro?`)) return;
           try { await api('DELETE', `/api/posts/${post.id}`); m.close(); onDelete(); toast('Publicación borrada'); }
           catch (e) { toast(e.message); }
         } }, icon('trash'))),
@@ -600,7 +602,7 @@ async function peoplePage() {
     list.replaceChildren(...(f.length ? f.map(u => h('a', { href: `#/u/${u.username}`, class: 'person' },
       avatar(u), h('b', {}, u.displayName), h('span', { class: 'muted' }, '@' + u.username),
       h('p', {}, u.bio || ''),
-      u.isMe ? h('span', { class: 'btn ghost' }, 'Tú') : followButton(u))) :
+      u.suspended ? h('span', { class: 'tag expired' }, 'Suspendida') : u.isMe ? h('span', { class: 'btn ghost' }, 'Tú') : followButton(u))) :
       [h('div', { class: 'empty', style: 'grid-column:1/-1' }, filter === 'following' && !q ? 'Todavía no sigues a nadie.' : 'No hay nadie con ese nombre.')]));
   };
   const search = h('input', { type: 'text', placeholder: 'Buscar personas…', oninput: e => { q = e.target.value.toLowerCase().trim(); paint(); } });
@@ -777,6 +779,8 @@ async function profilePage(username, section) {
         h('div', { class: 'handle' }, '@' + user.username),
         user.bio && h('div', { class: 'banner-bio' }, user.bio),
         user.invitedBy && h('div', { class: 'banner-inv' }, 'Invitado por ', h('a', { href: `#/u/${user.invitedBy}` }, '@' + user.invitedBy)),
+        user.suspended && h('div', { class: 'banner-flag' }, 'Cuenta suspendida'),
+        user.blockedByMe && h('div', { class: 'banner-flag' }, 'Has bloqueado a esta persona'),
         h('div', { class: 'banner-stats' },
           h('span', {}, h('b', {}, user.postCount), ' publicaciones'),
           h('span', {}, followersEl, ' seguidores'),
@@ -801,9 +805,22 @@ async function profilePage(username, section) {
   } else {
     const fb = followButton(user, f => { followersEl.textContent = Number(followersEl.textContent) + (f ? 1 : -1); });
     fb.dataset.extra = ' ctx-btn'; fb.repaint();
+    const blockBtn = ctxButton('ban', user.blockedByMe ? 'Desbloquear' : 'Bloquear', async () => {
+      if (!user.blockedByMe && !confirm(`¿Bloquear a @${user.username}? No podrá escribirte, no verá tu perfil ni tus publicaciones, y dejaréis de seguiros.`)) return;
+      try { const r = await api('POST', `/api/users/${user.username}/block`); toast(r.blocked ? 'Usuario bloqueado' : 'Usuario desbloqueado'); render(); }
+      catch (e) { toast(e.message); }
+    });
+    const modBtn = user.canModerate && ctxButton('flag', user.suspended ? 'Reactivar cuenta' : 'Suspender cuenta', async () => {
+      if (!confirm(user.suspended ? `¿Reactivar la cuenta de @${user.username}?` : `¿Suspender la cuenta de @${user.username}? Se cerrarán sus sesiones, no podrá entrar y su contenido dejará de verse.`)) return;
+      try { const r = await api('POST', `/api/admin/users/${user.username}/suspend`); toast(r.suspended ? 'Cuenta suspendida' : 'Cuenta reactivada'); render(); }
+      catch (e) { toast(e.message); }
+    });
     shell.context.replaceChildren(
-      ...ctxSection('Perfil', `El espacio de ${user.displayName}.`), fb,
-      ...(section !== 'contacto' ? [ctxButton('message', 'Enviar mensaje', () => { location.hash = `${base}/contacto`; })] : []));
+      ...ctxSection('Perfil', `El espacio de ${user.displayName}.`),
+      ...(user.blockedByMe || user.suspended ? [] : [fb]),
+      ...(section !== 'contacto' && !user.blockedByMe && !user.suspended ? [ctxButton('message', 'Enviar mensaje', () => { location.hash = `${base}/contacto`; })] : []),
+      blockBtn,
+      ...(modBtn ? [h('div', { class: 'ctx-title', style: 'margin-top:6px' }, 'Administración'), modBtn] : []));
   }
 
   if (section === 'bienvenida') {
@@ -822,7 +839,10 @@ async function profilePage(username, section) {
   } else if (section === 'proyectos') {
     body.append(await projectsView(user));
   } else {
-    body.append(user.isMe ? await inboxView() : chatView(user));
+    body.append(user.isMe ? await inboxView()
+      : user.blockedByMe ? h('div', { class: 'about' }, h('h3', {}, 'Contacto'), h('div', { class: 'muted' }, 'Has bloqueado a esta persona. Desbloquéala para poder escribirle.'))
+      : user.suspended ? h('div', { class: 'about' }, h('h3', {}, 'Contacto'), h('div', { class: 'muted' }, 'Esta cuenta está suspendida.'))
+      : chatView(user));
   }
 }
 
@@ -1216,7 +1236,13 @@ async function projectPage(id, section) {
     shell.context.replaceChildren(
       ...ctxSection('Proyecto', `Un proyecto de ${owner.displayName}.`),
       ctxButton('user', `Perfil de ${owner.displayName}`, () => { location.hash = `#/u/${owner.username}`; }),
-      ctxButton('message', 'Enviar mensaje', () => { location.hash = `#/u/${owner.username}/contacto`; }));
+      ctxButton('message', 'Enviar mensaje', () => { location.hash = `#/u/${owner.username}/contacto`; }),
+      ...(project.canDelete ? [h('div', { class: 'ctx-title', style: 'margin-top:6px' }, 'Administración'),
+        ctxButton('trash', 'Borrar proyecto', async () => {
+          if (!confirm(`Vas a borrar el proyecto "${project.name}" de @${owner.username} como administrador, con todas sus publicaciones y archivos. ¿Seguro?`)) return;
+          try { await api('DELETE', `/api/projects/${project.id}`); toast('Proyecto borrado'); location.hash = `#/u/${owner.username}/proyectos`; }
+          catch (e) { toast(e.message); }
+        })] : []));
   }
 
   if (section === 'archivos') {
