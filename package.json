@@ -1,0 +1,18 @@
+{
+  "name": "tinker",
+  "private": true,
+  "description": "Tinker (cacharrando): red social privada para proyectos. El servidor no necesita instalar nada; npm solo hace falta para modificar la web.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "dev": "vite --config web/vite.config.mjs",
+    "build": "vite build --config web/vite.config.mjs",
+    "test": "node --test tests/seguridad.test.js"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.1.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vite": "8.3.4"
+  }
+}

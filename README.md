@@ -12,31 +12,40 @@ Sin dependencias: solo Node.js (usa el SQLite integrado).
 ## Estructura
 ```
 server.js            arranque (llama a server/app.js)
-server/              el servidor
+server/              el servidor (Node.js, sin dependencias)
   app.js             servidor HTTP: protecciones comunes y reparto de cada petición
   config.js          carpetas, límites, cuotas y data/config.json
   db.js              tablas de SQLite y migraciones
-  http/              piezas HTTP: enrutador, leer peticiones, validar, archivos estáticos, cabeceras de seguridad
+  http/              enrutador, leer peticiones, validar, archivos estáticos, cabeceras de seguridad
   security/          contraseñas, sesiones, límites de uso, bloqueo por fallos y registro de seguridad
-  services/          lógica de cada tema, compartida entre rutas: usuarios, publicaciones, proyectos, fotos, espacio...
+  services/          lógica de cada tema, compartida entre rutas: usuarios, publicaciones, proyectos...
   routes/            la API, un archivo por tema (auth, account, posts, projects, files, messages...)
   lib/               utilidades sueltas (unidades, huellas SHA-256)
-public/              la web
-  index.html         página vacía que carga los estilos y js/main.js
-  css/               estilos por tema (base, componentes, estructura, publicaciones, perfil, proyectos...)
-  js/main.js         arranque de la web
-  js/router.js       qué página se pinta según la dirección (#/u/..., #/p/...)
-  js/core/           sin interfaz: crear elementos, API, estado compartido, formatos, Markdown
-  js/ui/             componentes: iconos, ventanas, carrusel, desplegable, avisos, avatar
-  js/media/          fotos y vídeos: reducir, portada de vídeo, subidas con progreso
-  js/layout/         menú lateral fijo y menú de la cuenta
-  js/features/       cada parte de la red: auth, feed, posts, people, profile, projects, chat, account
+web/                 el código de la web (React)
+  index.html         página base
+  vite.config.mjs    cómo se compila
+  src/main.jsx       arranque de la web
+  src/App.jsx        qué página se pinta según la dirección (#/u/..., #/p/...)
+  src/core/          sin interfaz: API, sesión, dirección, formatos, Markdown
+  src/ui/            componentes: iconos, ventanas, carrusel, desplegable, avisos, avatar
+  src/media/         fotos y vídeos: reducir, portada de vídeo, subidas con progreso
+  src/layout/        menú lateral fijo y menú de la cuenta
+  src/features/      cada parte de la red: auth, feed, posts, people, profile, projects, chat, account
+  src/styles/        estilos por tema
+public/              la web ya compilada (la genera "npm run build"; es lo que sirve el servidor)
 data/                base de datos, fotos, archivos de proyectos y configuración (no se sube al repositorio)
 demo/                perfiles de prueba
 tests/               pruebas de seguridad
 ```
 Las dependencias van siempre en un sentido: rutas → servicios → base de datos, y páginas → componentes → núcleo.
-Ningún módulo depende de otro que a su vez dependa de él.
+
+## Modificar la web
+La web está hecha con **React** y se compila con **Vite**. Para usar Tinker no hace falta nada de esto:
+`public/` ya está compilada. Solo si cambias algo en `web/`:
+
+1. `npm install` (la primera vez).
+2. `npm run dev` abre la web en http://localhost:5173 y se recarga sola al guardar (con Tinker abierto en el 3000).
+3. `npm run build` (o doble clic en `Compilar la web.bat`) genera `public/` con los cambios.
 
 ## Cómo funciona
 - **Proyectos** (como en GitHub): archivos, README y Multimedia.
