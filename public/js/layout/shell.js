@@ -1,4 +1,6 @@
 // Estructura fija de la web: menú lateral (siempre igual) y contenido a la derecha.
+// En el móvil cambia de sitio: los tres botones principales van en una barra abajo, las opciones
+// de cada página en una fila encima del contenido y el botón de la cuenta arriba a la derecha.
 import { api } from '../core/api.js';
 import { h } from '../core/dom.js';
 import { rerender, session } from '../core/state.js';
@@ -12,6 +14,9 @@ export const root = document.getElementById('root');
 // y shell.content (la parte derecha). Las páginas no tocan nada más.
 export const shell = {};
 
+// Ancho por debajo del cual se usa el diseño de móvil (el mismo que en css/layout.css)
+const phone = matchMedia('(max-width: 640px)');
+
 // Menú lateral fijo + contenido. Se construye una vez al iniciar sesión.
 export function buildShell() {
   shell.nav = {};
@@ -21,19 +26,31 @@ export function buildShell() {
   shell.content = h('main', { class: 'content' });
   shell.mebox = h('div', { class: 'mebox' });
   shell.badge = h('span', { class: 'badge nav-badge', hidden: true });
-  root.replaceChildren(
-    h('aside', { class: 'sidebar' },
-      h('a', { href: '#/', class: 'logo' }, h('span', { class: 'logo-mark' }, icon('wrench')),
-        h('span', { class: 'lbl' }, 'Tinker', h('span', { class: 'logo-sub' }, 'cacharrando'))),
-      h('nav', { class: 'mainnav' },
-        navItem('feed', '#/', 'home', 'Inicio'),
-        navItem('personas', '#/personas', 'users', 'Personas'),
-        navItem('perfil', '#/', 'user', 'Mi perfil')),
-      shell.context,
-      h('div', { class: 'spacer-v' }),
-      shell.mebox),
-    shell.content);
+  const logo = () => h('a', { href: '#/', class: 'logo' }, h('span', { class: 'logo-mark' }, icon('wrench')),
+    h('span', { class: 'lbl' }, 'Tinker', h('span', { class: 'logo-sub' }, 'cacharrando')));
+  shell.mainnav = h('nav', { class: 'mainnav' },
+    navItem('feed', '#/', 'home', 'Inicio'),
+    navItem('personas', '#/personas', 'users', 'Personas'),
+    navItem('perfil', '#/', 'user', 'Mi perfil'));
+  shell.sidebar = h('aside', { class: 'sidebar' }, logo(), shell.mainnav, shell.context, h('div', { class: 'spacer-v' }), shell.mebox);
+  shell.topbar = h('header', { class: 'topbar' }, logo());    // solo se ve en el móvil
+  shell.ctxSlot = h('div', { class: 'ctx-slot' });            // ídem: aquí van las opciones de la página
+  root.replaceChildren(shell.sidebar, shell.topbar, shell.ctxSlot, shell.content);
+  placeForScreen();
 }
+
+// Mueve las opciones de la página y el botón de la cuenta según el tamaño de la pantalla.
+// Son los mismos elementos, solo cambian de sitio: las páginas no tienen que saber nada.
+function placeForScreen() {
+  if (phone.matches) {
+    shell.ctxSlot.append(shell.context);
+    shell.topbar.append(shell.mebox);
+  } else {
+    shell.mainnav.after(shell.context);
+    shell.sidebar.append(shell.mebox);
+  }
+}
+phone.addEventListener('change', () => { if (shell.sidebar) placeForScreen(); });
 
 // Número de mensajes sin leer junto a "Mi perfil"
 export async function refreshUnread() {
@@ -49,7 +66,7 @@ export function startUnreadPolling() {
   setInterval(() => { if (session.me && shell.badge && !document.hidden) refreshUnread(); }, 15000);
 }
 
-// Botón de la cuenta (abajo a la izquierda) con su menú, y cerrar sesión
+// Botón de la cuenta (abajo a la izquierda; arriba a la derecha en el móvil) con su menú, y cerrar sesión
 export function paintMe() {
   if (!shell.nav.perfil.contains(shell.badge)) shell.nav.perfil.append(shell.badge);
   shell.nav.perfil.href = `#/u/${session.me.username}`;

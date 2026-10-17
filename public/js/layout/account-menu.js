@@ -18,9 +18,11 @@ export function openAccountMenu(anchor, logout) {
     item('shield', 'Cuenta y seguridad', openSecurity),
     h('div', { class: 'acct-sep' }),
     item('logout', 'Cerrar sesión', logout, 'danger'));
+  // Se abre hacia arriba si el botón está abajo (ordenador) y hacia abajo si está arriba (móvil)
   const r = anchor.getBoundingClientRect();
-  menu.style.left = `${Math.max(8, r.left)}px`;
-  menu.style.bottom = `${innerHeight - r.top + 6}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 258))}px`;
+  if (r.top > innerHeight / 2) menu.style.bottom = `${innerHeight - r.top + 6}px`;
+  else menu.style.top = `${r.bottom + 6}px`;
   document.body.append(menu);
   setTimeout(() => { document.addEventListener('click', close); window.addEventListener('hashchange', close); });
   menu.addEventListener('click', e => e.stopPropagation());
