@@ -272,22 +272,76 @@ function getPost(id, me) {
   return mapPosts([r], me)[0];
 }
 
+// ---------- Limites de uso y registro de seguridad ----------
+// Ventanas fijas en memoria: { clave -> { n, reset } }
+const buckets = new Map();
+function hit(key, max, windowMs) {
+  const now = Date.now();
+  let b = buckets.get(key);
+  if (!b || b.reset <= now) { b = { n: 0, reset: now + windowMs }; buckets.set(key, b); }
+  b.n++;
+  return { ok: b.n <= max, retryAfter: Math.ceil((b.reset - now) / 1000) };
+}
+function peek(key) { const b = buckets.get(key); return b && b.reset > Date.now() ? b.n : 0; }
+function clearKey(key) { buckets.delete(key); }
+setInterval(() => { const now = Date.now(); for (const [k, b] of buckets) if (b.reset <= now) buckets.delete(k); }, 10 * 60 * 1000).unref();
+
+function clientIp(req) {
+  if (config.trustProxy) {
+    const cf = req.headers['cf-connecting-ip'];
+    if (cf) return String(cf).trim();
+    const xff = req.headers['x-forwarded-for'];
+    if (xff) return String(xff).split(',')[0].trim();
+  }
+  return (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+}
+function tooMany(retryAfter, what) {
+  const min = Math.max(1, Math.ceil(retryAfter / 60));
+  const e = new HttpError(429, `${what}. Espera ${min} minuto${min === 1 ? '' : 's'} y vuelve a intentarlo.`);
+  e.retryAfter = retryAfter;
+  return e;
+}
+// Comprueba un limite y lanza error 429 si se pasa
+function limit(key, max, windowMs, what = 'Demasiadas peticiones') {
+  const r = hit(key, max, windowMs);
+  if (!r.ok) throw tooMany(r.retryAfter, what);
+}
+const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+
+// Registro de seguridad en data/seguridad.log (se rota al pasar de 5 MB)
+const SECURITY_LOG = path.join(DATA, 'seguridad.log');
+function securityLog(event, req, detail = '') {
+  const line = `${new Date().toISOString()}\t${event}\t${req ? clientIp(req) : '-'}\t${detail}\n`;
+  try {
+    const st = fs.existsSync(SECURITY_LOG) && fs.statSync(SECURITY_LOG);
+    if (st && st.size > 5 * 1024 * 1024) fs.renameSync(SECURITY_LOG, SECURITY_LOG + '.1');
+    fs.appendFileSync(SECURITY_LOG, line);
+  } catch {}
+}
+
 // ---------- API ----------
 const routes = [];
 const route = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' + pattern + '$'), fn });
 
 route('POST', '/api/register', async (req, res) => {
+  const ip = clientIp(req);
+  limit('register:' + ip, 10, HOUR, 'Demasiados intentos de registro');
   const b = await readBody(req);
   const username = str(b.username, 20, 'El usuario');
   const displayName = str(b.displayName, 40, 'El nombre') || username;
   const password = typeof b.password === 'string' ? b.password : '';
-  if (str(b.invite, 50, 'El codigo') !== config.inviteCode) throw new HttpError(403, 'Codigo de invitacion incorrecto');
+  if (str(b.invite, 50, 'El codigo') !== config.inviteCode) {
+    securityLog('invitacion_incorrecta', req, username);
+    limit('badinvite:' + ip, 5, HOUR, 'Demasiados codigos de invitacion incorrectos');
+    throw new HttpError(403, 'Codigo de invitacion incorrecto');
+  }
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) throw new HttpError(400, 'El usuario debe tener 3-20 letras, numeros o _');
   if (password.length < 6) throw new HttpError(400, 'La contrasena debe tener al menos 6 caracteres');
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) throw new HttpError(409, 'Ese usuario ya existe');
   const salt = crypto.randomBytes(16).toString('hex');
   const info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)')
     .run(username, displayName, hashPassword(password, salt), salt, Date.now());
+  securityLog('registro', req, username);
   return login(res, Number(info.lastInsertRowid));
 });
 
@@ -300,10 +354,30 @@ function login(res, userId) {
   });
 }
 
+// Hash falso para tardar lo mismo aunque el usuario no exista (no se puede saber si existe midiendo tiempos)
+const DUMMY_SALT = crypto.randomBytes(16).toString('hex');
+const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'), DUMMY_SALT);
+const LOGIN_MAX_FAILS = 5, LOGIN_LOCK = 15 * MIN;
 route('POST', '/api/login', async (req, res) => {
+  const ip = clientIp(req);
   const b = await readBody(req);
-  const u = db.prepare('SELECT * FROM users WHERE username = ?').get(str(b.username, 20, 'El usuario'));
-  if (!u || !checkPassword(String(b.password || ''), u.salt, u.pass_hash)) throw new HttpError(401, 'Usuario o contrasena incorrectos');
+  const name = str(b.username, 40, 'El usuario').toLowerCase();
+  const userKey = 'loginfail:u:' + name, ipKey = 'loginfail:ip:' + ip;
+  // Bloqueo: 5 fallos seguidos en una cuenta o 20 desde la misma IP -> 15 minutos sin poder probar
+  for (const [k, max] of [[userKey, LOGIN_MAX_FAILS], [ipKey, 20]]) {
+    if (peek(k) >= max) { const bk = buckets.get(k); throw tooMany(Math.ceil((bk.reset - Date.now()) / 1000), 'Demasiados intentos fallidos'); }
+  }
+  const u = db.prepare('SELECT * FROM users WHERE username = ?').get(name);
+  const ok = u ? checkPassword(String(b.password || ''), u.salt, u.pass_hash) : (checkPassword('x', DUMMY_SALT, DUMMY_HASH), false);
+  if (!ok) {
+    const r1 = hit(userKey, LOGIN_MAX_FAILS, LOGIN_LOCK); hit(ipKey, 20, LOGIN_LOCK);
+    securityLog('login_fallido', req, name);
+    if (!r1.ok || peek(userKey) >= LOGIN_MAX_FAILS) securityLog('cuenta_bloqueada_15min', req, name);
+    const left = Math.max(0, LOGIN_MAX_FAILS - peek(userKey));
+    throw new HttpError(401, left > 0 && left <= 2 ? `Usuario o contrasena incorrectos (te quedan ${left} intento${left === 1 ? '' : 's'})` : 'Usuario o contrasena incorrectos');
+  }
+  clearKey(userKey);
+  securityLog('login', req, u.username);
   login(res, u.id);
 });
 
@@ -320,6 +394,7 @@ route('GET', '/api/me', async (req, res) => {
 
 route('PUT', '/api/me', async (req, res) => {
   const me = requireUser(req);
+  limit('profile:' + me.id, 30, HOUR, 'Has cambiado el perfil demasiadas veces');
   const b = await readBody(req, 16 * 1024 * 1024);
   const displayName = str(b.displayName, 40, 'El nombre') || me.username;
   const bio = str(b.bio, 200, 'La frase corta');
@@ -361,6 +436,7 @@ function sniffMedia(buf) {
 }
 route('POST', '/api/media', async (req, res, url) => {
   const me = requireUser(req);
+  limit('media:' + me.id, 120, HOUR, 'Has subido demasiados archivos seguidos');
   const want = url.searchParams.get('kind') === 'video' ? 'video' : 'image';
   const limit = want === 'video' ? MAX_VIDEO : MAX_IMAGE;
   const tmp = path.join(UPLOADS, 'tmp-' + crypto.randomBytes(8).toString('hex'));
@@ -401,6 +477,7 @@ function ownUpload(u, me, kind) {
 
 route('POST', '/api/posts', async (req, res) => {
   const me = requireUser(req);
+  limit('post:' + me.id, 30, HOUR, 'Has publicado demasiado en poco tiempo');
   const b = await readBody(req);
   const title = str(b.title, 100, 'El titulo');
   const text = str(b.text, 2000, 'La descripcion');
@@ -485,6 +562,7 @@ route('GET', '/api/users/([A-Za-z0-9_]+)', async (req, res, url, [username]) => 
 
 route('POST', '/api/users/([A-Za-z0-9_]+)/follow', async (req, res, url, [username]) => {
   const me = requireUser(req);
+  limit('follow:' + me.id, 120, HOUR, 'Demasiados cambios de seguimiento');
   const u = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
   if (!u) throw new HttpError(404, 'Ese usuario no existe');
   if (u.id === me.id) throw new HttpError(400, 'No puedes seguirte a ti mismo');
@@ -526,6 +604,7 @@ route('GET', '/api/users/([A-Za-z0-9_]+)/projects', async (req, res, url, [usern
 
 route('POST', '/api/projects', async (req, res) => {
   const me = requireUser(req);
+  limit('project:' + me.id, 20, HOUR, 'Has creado demasiados proyectos seguidos');
   const b = await readBody(req);
   const name = str(b.name, 60, 'El nombre');
   const description = str(b.description, 300, 'La descripcion');
@@ -543,6 +622,7 @@ route('GET', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
 
 route('PUT', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
   const me = requireUser(req);
+  limit('projectedit:' + me.id, 120, HOUR, 'Demasiados cambios seguidos');
   const p = ownProject(id, me);
   const b = await readBody(req);
   const name = b.name === undefined ? p.name : str(b.name, 60, 'El nombre');
@@ -585,6 +665,7 @@ route('GET', '/api/projects/(\\d+)/files', async (req, res, url, [id]) => {
 // Sube un archivo: el cuerpo es el archivo tal cual y la ruta va en ?path=
 route('POST', '/api/projects/(\\d+)/files', async (req, res, url, [id]) => {
   const me = requireUser(req);
+  limit('files:' + me.id, 600, HOUR, 'Has subido demasiados archivos seguidos');
   const p = ownProject(id, me);
   const filePath = cleanPath(url.searchParams.get('path'));
   const data = await readRaw(req, MAX_FILE);
@@ -661,6 +742,8 @@ route('POST', '/api/messages/([A-Za-z0-9_]+)', async (req, res, url, [username])
   const me = requireUser(req);
   const u = userByName(username);
   if (u.id === me.id) throw new HttpError(400, 'No puedes escribirte a ti mismo');
+  limit('msg:' + me.id, 30, MIN, 'Estas enviando mensajes demasiado rapido');
+  limit('msgday:' + me.id, 1000, DAY, 'Has llegado al limite de mensajes de hoy');
   const b = await readBody(req);
   const text = str(b.text, 2000, 'El mensaje');
   if (!text) throw new HttpError(400, 'El mensaje esta vacio');
@@ -771,7 +854,11 @@ const server = http.createServer(async (req, res) => {
     return send(res, 400, { error: 'Direccion no valida' });
   }
   try {
-    if (!['GET', 'HEAD'].includes(req.method) && !sameOrigin(req)) throw new HttpError(403, 'Peticion bloqueada: no viene de Tinker');
+    if (!['GET', 'HEAD'].includes(req.method) && !sameOrigin(req)) {
+      securityLog('csrf_bloqueado', req, `${req.method} ${p} origin=${req.headers.origin || '-'}`);
+      throw new HttpError(403, 'Peticion bloqueada: no viene de Tinker');
+    }
+    if (p.startsWith('/api/')) limit('api:' + clientIp(req), 900, MIN, 'Demasiadas peticiones');
     if (p.startsWith('/api/')) {
       for (const r of routes) {
         const m = r.method === req.method && r.re.exec(p);
@@ -783,7 +870,8 @@ const server = http.createServer(async (req, res) => {
     return serveFile(res, PUBLIC, p === '/' ? 'index.html' : p.slice(1));
   } catch (e) {
     if (!(e instanceof HttpError)) console.error(e);
-    if (!res.headersSent) send(res, e.status || 500, { error: e instanceof HttpError ? e.message : 'Error interno' });
+    if (!res.headersSent) send(res, e.status || 500, { error: e instanceof HttpError ? e.message : 'Error interno' },
+      e.retryAfter ? { 'Retry-After': String(e.retryAfter) } : {});
   }
 });
 
