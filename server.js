@@ -17,7 +17,7 @@ try {
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOT = __dirname;
-const DATA = path.join(ROOT, 'data');
+const DATA = process.env.TINKER_DATA ? path.resolve(process.env.TINKER_DATA) : path.join(ROOT, 'data');
 const UPLOADS = path.join(DATA, 'uploads');
 const FILES = path.join(DATA, 'files');
 const MAX_FILE = 50 * 1024 * 1024;
@@ -154,6 +154,12 @@ function send(res, status, obj, headers = {}) {
 }
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 function readBody(req, limit = 8 * 1024 * 1024) {
+  // Solo se acepta JSON: asi otra web no puede mandar formularios "disfrazados" en nombre del usuario
+  const type = String(req.headers['content-type'] || '');
+  if (Number(req.headers['content-length'] || 0) > 0 && !type.startsWith('application/json')) {
+    req.resume();
+    return Promise.reject(new HttpError(415, 'Formato de datos no valido'));
+  }
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
     req.on('data', c => {
@@ -193,7 +199,8 @@ function cleanPath(p) {
 function parseCookies(req) {
   const out = {};
   (req.headers.cookie || '').split(';').forEach(p => {
-    const i = p.indexOf('='); if (i > 0) out[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1).trim());
+    const i = p.indexOf('=');
+    if (i > 0) { try { out[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1).trim()); } catch {} }
   });
   return out;
 }
@@ -714,10 +721,57 @@ function serveUpload(req, res, rel) {
   });
 }
 
+// ---------- Cabeceras de seguridad ----------
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' https://fonts.googleapis.com",
+  "style-src-attr 'unsafe-inline'",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "connect-src 'self'",
+  "frame-src 'self'",
+  "frame-ancestors 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+].join('; ');
+function securityHeaders(req, res) {
+  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  if (isHttps(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+}
+function isHttps(req) {
+  if (req.socket.encrypted) return true;
+  return !!config.trustProxy && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+}
+// Peticiones que cambian algo: tienen que venir de la propia web (proteccion CSRF)
+function sameOrigin(req) {
+  const site = req.headers['sec-fetch-site'];
+  if (site && site !== 'same-origin' && site !== 'none') return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try { return new URL(origin).host === req.headers.host; } catch { return false; }
+}
+
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
-  const p = decodeURIComponent(url.pathname);
+  securityHeaders(req, res);
+  let url, p;
   try {
+    url = new URL(req.url, 'http://x');
+    p = decodeURIComponent(url.pathname);
+    if (p.includes('\0')) throw new Error('nul');
+  } catch {
+    return send(res, 400, { error: 'Direccion no valida' });
+  }
+  try {
+    if (!['GET', 'HEAD'].includes(req.method) && !sameOrigin(req)) throw new HttpError(403, 'Peticion bloqueada: no viene de Tinker');
     if (p.startsWith('/api/')) {
       for (const r of routes) {
         const m = r.method === req.method && r.re.exec(p);
@@ -732,6 +786,16 @@ const server = http.createServer(async (req, res) => {
     if (!res.headersSent) send(res, e.status || 500, { error: e instanceof HttpError ? e.message : 'Error interno' });
   }
 });
+
+// Tiempos maximos: evita que alguien deje conexiones abiertas a medias para saturar el servidor
+server.headersTimeout = 20 * 1000;
+server.requestTimeout = 30 * 60 * 1000;
+server.keepAliveTimeout = 5 * 1000;
+server.maxHeadersCount = 60;
+
+// Si algo falla sin control, se apunta pero el servidor sigue en pie
+process.on('uncaughtException', e => console.error('Error no controlado:', e));
+process.on('unhandledRejection', e => console.error('Promesa rechazada sin controlar:', e));
 
 server.on('error', err => {
   if (err.code === 'EADDRINUSE') {
