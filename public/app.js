@@ -140,7 +140,9 @@ function openPost(post, onDelete) {
         h('a', { href: `#/u/${post.author.username}` }, avatar(post.author)),
         h('div', { style: 'min-width:0' },
           h('a', { href: `#/u/${post.author.username}`, class: 'name' }, post.author.displayName),
-          h('div', { class: 'muted', style: 'font-size:13px' }, `@${post.author.username} · ${timeAgo(post.createdAt)}`)),
+          h('div', { class: 'muted', style: 'font-size:13px' }, `@${post.author.username} · `,
+            h('time', { title: new Date(post.createdAt).toLocaleString('es-ES') },
+              new Date(post.createdAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })))),
         h('div', { class: 'spacer' }),
         post.mine && h('button', { class: 'icon-btn', title: 'Borrar publicación', onclick: async () => {
           if (!confirm('¿Borrar esta publicación?')) return;
