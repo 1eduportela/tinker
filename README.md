@@ -25,3 +25,26 @@ Sin dependencias: solo Node.js (usa el SQLite integrado).
 3 proyectos y 10 publicaciones cada uno (varias en carrusel), README, archivos y un mensaje.
 El contenido está en `demo/contenido.js`. `Borrar perfiles de prueba.bat` los quita.
 Las imágenes se generan con `python3 demo/generar_imagenes.py`.
+
+## Seguridad
+- **Contraseñas**: scrypt con sal (32 MB por cálculo); mínimo 8 caracteres, sin contraseñas típicas.
+  Las antiguas se re-cifran solas al iniciar sesión.
+- **Inicio de sesión**: 5 fallos bloquean la cuenta 15 minutos; mismo tiempo de respuesta exista o no el usuario.
+- **Sesiones**: clave aleatoria de 256 bits en cookie `HttpOnly` + `SameSite`; en la base de datos solo su huella.
+  Caducan a los 30 días sin uso (180 como máximo). Se pueden ver y cerrar en *Cuenta y seguridad*.
+- **Invitaciones**: códigos de un solo uso que caducan en 7 días; el código maestro también es de un solo uso.
+- **Protección de la web**: CSP estricta, anti-clickjacking, CSRF (Origin + solo JSON), nosniff, sin Referer.
+- **Archivos**: se comprueba el formato real de cada foto/vídeo; los archivos de proyecto nunca se ejecutan en
+  el navegador; cuotas de 3 GB por persona y 1,5 GB al día; limpieza automática de archivos huérfanos.
+- **Límites de uso** en registros, mensajes, publicaciones, subidas y peticiones en general.
+- **Moderación**: bloquear usuarios; la primera cuenta es administradora y puede suspender cuentas y borrar contenido.
+- **Registro**: `data/seguridad.log` apunta inicios de sesión, fallos, bloqueos y acciones de moderación.
+- **Pruebas**: `node --test tests/seguridad.test.js` (o `Probar seguridad.bat`) ataca una copia temporal.
+
+### Para publicarla en internet
+Pon delante un intermediario con HTTPS (Cloudflare Tunnel, Caddy...) y cambia `"trustProxy": true` en
+`data/config.json` para que Tinker use la IP real de cada visitante. Las cookies pasan a ser `Secure` solas.
+
+### Variables de entorno opcionales
+`PORT`, `TINKER_DATA` (carpeta de datos), `TINKER_QUOTA_MB`, `TINKER_DAILY_MB`, `TINKER_MIN_FREE_MB`,
+`TINKER_REGISTER_PER_HOUR`.

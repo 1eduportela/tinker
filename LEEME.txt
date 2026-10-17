@@ -5,7 +5,8 @@ ARRANCAR
 1. Instala Node.js (version LTS) desde https://nodejs.org  (solo la primera vez)
 2. Doble clic en "Iniciar red social.bat"
 3. Se abre el navegador en http://localhost:3000
-   La ventana negra muestra el CODIGO DE INVITACION que necesitan tus amigos para registrarse.
+   La ventana negra muestra un CODIGO DE INVITACION MAESTRO. Es de un solo uso: cuando alguien
+   lo usa, se genera otro nuevo y aparece en la ventana.
    Si cierras esa ventana, Tinker se apaga.
 
 LA PRIMERA VEZ, Windows puede preguntar si Node.js puede usar la red: marca "Redes privadas" y acepta.
@@ -22,4 +23,16 @@ DATOS
 - Todo se guarda en la carpeta "data": la base de datos (red.db), las fotos (uploads),
   los archivos de los proyectos (files) y el codigo de invitacion (config.json).
 - Para hacer copia de seguridad, copia la carpeta "data" con la red apagada.
-- Para cambiar el codigo de invitacion, edita data/config.json y reinicia.
+- data/seguridad.log guarda los inicios de sesion, fallos, bloqueos y acciones de moderacion.
+
+INVITAR A ALGUIEN
+- En Tinker: Personas > "Invitar a alguien". Cada codigo sirve para una sola persona y caduca en 7 dias.
+
+TU CUENTA
+- La primera cuenta registrada es la de ADMINISTRADOR: puede suspender cuentas y borrar contenido.
+- En tu perfil > "Cuenta y seguridad": cambiar la contrasena, ver y cerrar sesiones, ver tu espacio
+  y borrar tu cuenta.
+
+PROBAR LA SEGURIDAD
+- Doble clic en "Probar seguridad.bat": ataca una copia temporal de Tinker (no toca tus datos)
+  y dice si todas las protecciones funcionan.

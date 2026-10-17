@@ -537,7 +537,7 @@ const route = (method, pattern, fn) => routes.push({ method, re: new RegExp('^' 
 
 route('POST', '/api/register', async (req, res) => {
   const ip = clientIp(req);
-  limit('register:' + ip, 10, HOUR, 'Demasiados intentos de registro');
+  limit('register:' + ip, Number(process.env.TINKER_REGISTER_PER_HOUR) || 10, HOUR, 'Demasiados intentos de registro');
   const b = await readBody(req);
   const username = str(b.username, 20, 'El usuario');
   const displayName = str(b.displayName, 40, 'El nombre') || username;
@@ -567,6 +567,8 @@ route('POST', '/api/register', async (req, res) => {
     info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, pass_params, invited_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(username, displayName, hash, salt, PASS_PARAMS, invite ? invite.created_by : null, Date.now());
     if (invite) db.prepare('UPDATE invites SET used_by = ? WHERE id = ?').run(Number(info.lastInsertRowid), invite.id);
+    // La primera cuenta de una instalacion nueva es la administradora
+    if (!db.prepare('SELECT 1 FROM users WHERE is_admin = 1').get()) db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(Number(info.lastInsertRowid));
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   if (isMaster) rotateMasterCode();
