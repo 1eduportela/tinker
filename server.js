@@ -77,7 +77,29 @@ CREATE TABLE IF NOT EXISTS follows (
 );
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id);
 CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id);
+CREATE TABLE IF NOT EXISTS projects (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY,
+  from_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  read_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(from_id, to_id);
+CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_id, read_at);
 `);
+// Columnas nuevas en bases de datos ya existentes
+const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+if (!userCols.includes('banner')) db.exec('ALTER TABLE users ADD COLUMN banner TEXT');
+if (!userCols.includes('about')) db.exec("ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''");
 
 // ---------- Utilidades ----------
 function hashPassword(pw, salt) {
@@ -119,7 +141,7 @@ function parseCookies(req) {
 function currentUser(req) {
   const sid = parseCookies(req).sid;
   if (!sid) return null;
-  return db.prepare(`SELECT u.id, u.username, u.display_name, u.bio, u.avatar
+  return db.prepare(`SELECT u.id, u.username, u.display_name, u.bio, u.avatar, u.banner, u.about
     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?`).get(sid) || null;
 }
 function requireUser(req) {
@@ -142,7 +164,16 @@ function saveImage(dataUrl) {
   return '/uploads/' + name;
 }
 function publicUser(u) {
-  return { username: u.username, displayName: u.display_name, bio: u.bio, avatar: u.avatar };
+  return { username: u.username, displayName: u.display_name, bio: u.bio, avatar: u.avatar,
+    banner: u.banner || null, about: u.about || '' };
+}
+function userByName(username) {
+  const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  if (!u) throw new HttpError(404, 'Ese usuario no existe');
+  return u;
+}
+function unreadCount(userId) {
+  return db.prepare('SELECT COUNT(*) AS n FROM messages WHERE to_id = ? AND read_at IS NULL').get(userId).n;
 }
 
 const POST_SELECT = `
@@ -208,17 +239,22 @@ route('POST', '/api/logout', async (req, res) => {
 
 route('GET', '/api/me', async (req, res) => {
   const u = currentUser(req);
-  send(res, 200, { user: u ? publicUser(u) : null });
+  send(res, 200, { user: u ? publicUser(u) : null, unread: u ? unreadCount(u.id) : 0 });
 });
 
 route('PUT', '/api/me', async (req, res) => {
   const me = requireUser(req);
-  const b = await readBody(req);
+  const b = await readBody(req, 16 * 1024 * 1024);
   const displayName = str(b.displayName, 40, 'El nombre') || me.username;
-  const bio = str(b.bio, 200, 'La biografia');
+  const bio = str(b.bio, 200, 'La frase corta');
+  const about = typeof b.about === 'string' ? str(b.about, 3000, 'La bienvenida') : me.about;
   let avatar = me.avatar;
   if (b.avatar) avatar = saveImage(b.avatar);
-  db.prepare('UPDATE users SET display_name = ?, bio = ?, avatar = ? WHERE id = ?').run(displayName, bio, avatar, me.id);
+  let banner = me.banner;
+  if (b.banner) banner = saveImage(b.banner);
+  else if (b.removeBanner) banner = null;
+  db.prepare('UPDATE users SET display_name = ?, bio = ?, about = ?, avatar = ?, banner = ? WHERE id = ?')
+    .run(displayName, bio, about, avatar, banner, me.id);
   send(res, 200, { user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(me.id)) });
 });
 
@@ -314,6 +350,75 @@ route('POST', '/api/users/([A-Za-z0-9_]+)/follow', async (req, res, url, [userna
   const del = db.prepare('DELETE FROM follows WHERE follower_id = ? AND followee_id = ?').run(me.id, u.id);
   if (del.changes === 0) db.prepare('INSERT INTO follows (follower_id, followee_id) VALUES (?, ?)').run(me.id, u.id);
   send(res, 200, { following: del.changes === 0 });
+});
+
+// ---------- Proyectos (carpetas) ----------
+const mapProject = (r, me) => ({ id: r.id, name: r.name, description: r.description, createdAt: r.created_at, mine: r.user_id === me.id });
+
+route('GET', '/api/users/([A-Za-z0-9_]+)/projects', async (req, res, url, [username]) => {
+  const me = requireUser(req);
+  const u = userByName(username);
+  const rows = db.prepare('SELECT * FROM projects WHERE user_id = ? ORDER BY id DESC').all(u.id);
+  send(res, 200, { projects: rows.map(r => mapProject(r, me)) });
+});
+
+route('POST', '/api/projects', async (req, res) => {
+  const me = requireUser(req);
+  const b = await readBody(req);
+  const name = str(b.name, 60, 'El nombre');
+  const description = str(b.description, 300, 'La descripcion');
+  if (!name) throw new HttpError(400, 'Ponle un nombre al proyecto');
+  const info = db.prepare('INSERT INTO projects (user_id, name, description, created_at) VALUES (?, ?, ?, ?)')
+    .run(me.id, name, description, Date.now());
+  send(res, 200, { project: mapProject(db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(info.lastInsertRowid)), me) });
+});
+
+route('DELETE', '/api/projects/(\\d+)', async (req, res, url, [id]) => {
+  const me = requireUser(req);
+  const p = db.prepare('SELECT user_id FROM projects WHERE id = ?').get(Number(id));
+  if (!p) throw new HttpError(404, 'Proyecto no encontrado');
+  if (p.user_id !== me.id) throw new HttpError(403, 'Solo puedes borrar tus proyectos');
+  db.prepare('DELETE FROM projects WHERE id = ?').run(Number(id));
+  send(res, 200, { ok: true });
+});
+
+// ---------- Mensajes (chat) ----------
+route('GET', '/api/messages/([A-Za-z0-9_]+)', async (req, res, url, [username]) => {
+  const me = requireUser(req);
+  const u = userByName(username);
+  const after = Number(url.searchParams.get('after')) || 0;
+  const rows = db.prepare(`SELECT id, from_id, text, created_at FROM messages
+    WHERE id > ? AND ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))
+    ORDER BY id DESC LIMIT 300`).all(after, me.id, u.id, u.id, me.id).reverse();
+  if (rows.some(r => r.from_id === u.id)) {
+    db.prepare('UPDATE messages SET read_at = ? WHERE to_id = ? AND from_id = ? AND read_at IS NULL').run(Date.now(), me.id, u.id);
+  }
+  send(res, 200, { messages: rows.map(r => ({ id: r.id, text: r.text, createdAt: r.created_at, mine: r.from_id === me.id })) });
+});
+
+route('POST', '/api/messages/([A-Za-z0-9_]+)', async (req, res, url, [username]) => {
+  const me = requireUser(req);
+  const u = userByName(username);
+  if (u.id === me.id) throw new HttpError(400, 'No puedes escribirte a ti mismo');
+  const b = await readBody(req);
+  const text = str(b.text, 2000, 'El mensaje');
+  if (!text) throw new HttpError(400, 'El mensaje esta vacio');
+  db.prepare('INSERT INTO messages (from_id, to_id, text, created_at) VALUES (?, ?, ?, ?)').run(me.id, u.id, text, Date.now());
+  send(res, 200, { ok: true });
+});
+
+route('GET', '/api/conversations', async (req, res) => {
+  const me = requireUser(req);
+  const rows = db.prepare(`
+    SELECT u.*, m.text AS last_text, m.created_at AS last_at, m.from_id AS last_from,
+      (SELECT COUNT(*) FROM messages x WHERE x.from_id = u.id AND x.to_id = ? AND x.read_at IS NULL) AS unread
+    FROM users u
+    JOIN messages m ON m.id = (SELECT MAX(id) FROM messages
+      WHERE (from_id = u.id AND to_id = ?) OR (from_id = ? AND to_id = u.id))
+    WHERE u.id != ?
+    ORDER BY m.id DESC`).all(me.id, me.id, me.id, me.id);
+  send(res, 200, { conversations: rows.map(r => ({ user: publicUser(r), unread: r.unread,
+    last: { text: r.last_text, createdAt: r.last_at, mine: r.last_from === me.id } })) });
 });
 
 // ---------- Archivos estaticos ----------

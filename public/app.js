@@ -17,6 +17,9 @@ const ICONS = {
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
   trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  chevron: '<polyline points="6 9 12 15 18 9"/>',
+  send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
 };
 function icon(name) {
@@ -84,9 +87,9 @@ function resizeImage(file, max = 1600) {
     img.src = URL.createObjectURL(file);
   });
 }
-function pickImage(cb) {
+function pickImage(cb, max) {
   const inp = h('input', { type: 'file', accept: 'image/*' });
-  inp.onchange = async () => { if (inp.files[0]) try { cb(await resizeImage(inp.files[0])); } catch (e) { toast(e.message); } };
+  inp.onchange = async () => { if (inp.files[0]) try { cb(await resizeImage(inp.files[0], max)); } catch (e) { toast(e.message); } };
   inp.click();
 }
 function preload(post) {
@@ -208,27 +211,64 @@ function openComposer(onPost) {
 }
 
 function openEditProfile() {
-  let newAvatar = null;
+  let newAvatar = null, newBanner = null, removeBanner = false;
   const name = h('input', { type: 'text', value: me.displayName, maxlength: 40 });
-  const bio = h('textarea', { rows: 3, maxlength: 200, placeholder: 'Ingeniero mecánico, ciclista, maker…' }, me.bio);
+  const bio = h('input', { type: 'text', value: me.bio, maxlength: 200, placeholder: 'Ingeniero mecánico, ciclista, maker…' });
+  const about = h('textarea', { rows: 6, maxlength: 3000,
+    placeholder: 'Preséntate: quién eres, a qué te dedicas, qué te gusta cacharrear…' }, me.about);
+  const bannerBox = h('div', { class: 'banner-pick' });
+  const paintBanner = () => {
+    const src = newBanner || (!removeBanner && me.banner);
+    bannerBox.style.backgroundImage = src ? `url("${src}")` : '';
+    bannerBox.replaceChildren(
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => pickImage(d => { newBanner = d; removeBanner = false; paintBanner(); }, 2400) },
+        src ? 'Cambiar banner' : 'Añadir banner'),
+      src && h('button', { class: 'btn ghost', type: 'button', onclick: () => { newBanner = null; removeBanner = true; paintBanner(); } }, 'Quitar'));
+  };
+  paintBanner();
   const av = h('div', {}, avatar(me, 'big'));
   const save = h('button', { class: 'btn' }, 'Guardar');
   save.onclick = async () => {
     save.disabled = true;
     try {
-      me = (await api('PUT', '/api/me', { displayName: name.value, bio: bio.value, avatar: newAvatar })).user;
+      me = (await api('PUT', '/api/me', { displayName: name.value, bio: bio.value, about: about.value,
+        avatar: newAvatar, banner: newBanner, removeBanner })).user;
       m.close(); toast('Perfil guardado'); render();
     } catch (e) { toast(e.message); }
     save.disabled = false;
   };
   const m = modal(h('div', {},
     h('h2', {}, 'Editar perfil'),
+    h('label', {}, 'Banner'), bannerBox,
+    h('label', {}, 'Foto de perfil'),
     h('div', { class: 'avatar-edit' }, av, h('button', { class: 'btn ghost', onclick: () => pickImage(d => {
       newAvatar = d; av.replaceChildren(h('img', { class: 'avatar big', src: d }));
     }) }, 'Cambiar foto')),
     h('label', {}, 'Nombre visible'), name,
-    h('label', {}, 'Biografía'), bio,
+    h('label', {}, 'Frase corta (sale en el banner)'), bio,
+    h('label', {}, 'Bienvenida'), about,
     h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { class: 'spacer' }), save)));
+}
+
+function openNewProject(onCreate) {
+  const name = h('input', { type: 'text', maxlength: 60, placeholder: 'Brazo robótico, Media maratón 2026…' });
+  const desc = h('textarea', { rows: 3, maxlength: 300, placeholder: 'De qué va, en una o dos frases (opcional)' });
+  const btn = h('button', { class: 'btn' }, 'Crear proyecto');
+  btn.onclick = async () => {
+    if (!name.value.trim()) return toast('Ponle un nombre al proyecto');
+    btn.disabled = true;
+    try {
+      const { project } = await api('POST', '/api/projects', { name: name.value, description: desc.value });
+      m.close(); toast('Proyecto creado'); onCreate && onCreate(project);
+    } catch (e) { toast(e.message); }
+    btn.disabled = false;
+  };
+  const m = modal(h('div', {},
+    h('h2', {}, 'Nuevo proyecto'),
+    h('div', { class: 'muted' }, 'Cada proyecto es una carpeta donde irás guardando todo lo que hagas en él.'),
+    h('label', {}, 'Nombre'), name, h('label', {}, 'Descripción'), desc,
+    h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { class: 'spacer' }), btn)));
+  setTimeout(() => name.focus(), 50);
 }
 
 // =============== Cuadricula tipo Pinterest con scroll infinito ===============
@@ -308,6 +348,7 @@ function buildShell() {
   shell.context = h('div', { class: 'context' });
   shell.content = h('main', { class: 'content' });
   shell.mebox = h('div', { class: 'mebox' });
+  shell.badge = h('span', { class: 'badge nav-badge', hidden: true });
   root.replaceChildren(
     h('aside', { class: 'sidebar' },
       h('a', { href: '#/', class: 'logo' }, h('span', { class: 'logo-mark' }, icon('wrench')),
@@ -321,8 +362,20 @@ function buildShell() {
       shell.mebox),
     shell.content);
 }
+async function refreshUnread() {
+  try {
+    const { unread } = await api('GET', '/api/me');
+    if (!shell.badge) return;
+    shell.badge.textContent = unread;
+    shell.badge.hidden = !unread;
+    shell.badge.title = `${unread} mensaje${unread === 1 ? '' : 's'} sin leer`;
+  } catch {}
+}
+setInterval(() => { if (me && shell.badge && !document.hidden) refreshUnread(); }, 15000);
 function paintMe() {
+  if (!shell.nav.perfil.contains(shell.badge)) shell.nav.perfil.append(shell.badge);
   shell.nav.perfil.href = `#/u/${me.username}`;
+  refreshUnread();
   shell.mebox.replaceChildren(
     h('a', { href: `#/u/${me.username}`, class: 'me-link', title: me.displayName }, avatar(me, 'small'),
       h('span', { class: 'lbl' }, h('b', {}, me.displayName), h('small', { class: 'muted' }, '@' + me.username))),
@@ -349,7 +402,7 @@ function feedPage() {
 
 function followButton(user, onChange) {
   const b = h('button');
-  const paint = () => { b.className = (user.following ? 'btn ghost' : 'btn') + (b.dataset.extra || ''); b.textContent = user.following ? 'Siguiendo' : 'Seguir'; };
+  const paint = () => { b.className = (user.following ? 'btn ghost' : 'btn') + (b.dataset.extra ? b.dataset.extra + (user.following ? '' : ' primary') : ''); b.textContent = user.following ? 'Siguiendo' : 'Seguir'; };
   paint();
   b.onclick = async (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -385,34 +438,195 @@ async function peoplePage() {
   shell.content.replaceChildren(pageTitle('Personas'), list);
 }
 
-async function profilePage(username) {
+// =============== Perfil ===============
+const SECTIONS = [
+  { key: 'bienvenida', label: 'Bienvenida', ic: 'user' },
+  { key: 'proyectos', label: 'Proyectos', ic: 'folder' },
+  { key: 'contacto', label: 'Contacto', ic: 'message' },
+];
+
+function sectionDropdown(current, onPick) {
+  const cur = SECTIONS.find(s => s.key === current);
+  const menu = h('div', { class: 'dd-menu', hidden: true },
+    ...SECTIONS.map(s => h('button', { class: 'dd-item' + (s.key === current ? ' active' : ''),
+      onclick: () => { menu.hidden = true; if (s.key !== current) onPick(s.key); } }, icon(s.ic), s.label)));
+  const btn = h('button', { class: 'dd-btn', onclick: e => { e.stopPropagation(); menu.hidden = !menu.hidden; } },
+    icon(cur.ic), h('span', {}, cur.label), h('span', { class: 'chev' }, icon('chevron')));
+  const close = () => (menu.hidden = true);
+  document.addEventListener('click', close);
+  cleanup.push(() => document.removeEventListener('click', close));
+  return h('div', { class: 'dd' }, btn, menu);
+}
+
+async function profilePage(username, section) {
+  if (!SECTIONS.some(s => s.key === section)) section = 'bienvenida';
   const { user, posts } = await api('GET', `/api/users/${encodeURIComponent(username)}`);
-  let first = posts;
-  const grid = masonry(async before => {
-    if (!before && first) { const p = first; first = null; return p; }
-    return (await api('GET', `/api/users/${encodeURIComponent(username)}?before=${before}`)).posts;
-  }, user.isMe ? 'Todavía no has publicado nada. ¡Sube tu primer proyecto!' : 'Todavía no ha publicado nada.');
+  const base = `#/u/${user.username}`;
   const followersEl = h('b', {}, user.followers);
-  shell.content.replaceChildren(
-    h('div', { class: 'profile-head' }, avatar(user, 'big'),
-      h('div', {},
-        h('h1', {}, user.displayName), h('div', { class: 'muted' }, '@' + user.username),
-        user.bio && h('p', {}, user.bio),
-        h('div', { class: 'stats' },
+  let grid = null;
+
+  const banner = h('header', { class: 'banner' + (user.banner ? '' : ' empty'),
+    style: user.banner ? `background-image:url("${user.banner}")` : null },
+    user.isMe && h('button', { class: 'banner-edit', onclick: openEditProfile }, icon('image'),
+      h('span', {}, user.banner ? 'Cambiar banner' : 'Añadir banner')),
+    h('div', { class: 'banner-info' }, avatar(user, 'big'),
+      h('div', { style: 'min-width:0' },
+        h('h1', {}, user.displayName),
+        h('div', { class: 'handle' }, '@' + user.username),
+        user.bio && h('div', { class: 'banner-bio' }, user.bio),
+        h('div', { class: 'banner-stats' },
           h('span', {}, h('b', {}, user.postCount), ' publicaciones'),
           h('span', {}, followersEl, ' seguidores'),
-          h('span', {}, h('b', {}, user.followingCount), ' siguiendo')))),
-    grid.el);
+          h('span', {}, h('b', {}, user.followingCount), ' siguiendo')))));
+
+  const body = h('div', { class: 'section-body' });
+  shell.content.replaceChildren(banner,
+    h('div', { class: 'toolbar' }, sectionDropdown(section, k => { location.hash = `${base}/${k}`; })),
+    body);
+
   if (user.isMe) {
     shell.context.replaceChildren(
       ...ctxSection('Mi perfil', 'Así te ven los demás.'),
-      ctxButton('plus', 'Nueva publicación', () => openComposer(p => grid.prepend(p)), true),
+      ctxButton('plus', 'Nueva publicación', () => openComposer(p => {
+        if (grid) grid.prepend(p); else location.hash = `${base}/bienvenida`;
+      }), true),
+      ctxButton('folder', 'Nuevo proyecto', () => openNewProject(() => {
+        if (section === 'proyectos') render(); else location.hash = `${base}/proyectos`;
+      })),
       ctxButton('edit', 'Editar perfil', openEditProfile));
   } else {
     const fb = followButton(user, f => { followersEl.textContent = Number(followersEl.textContent) + (f ? 1 : -1); });
     fb.dataset.extra = ' ctx-btn'; fb.repaint();
-    shell.context.replaceChildren(...ctxSection('Perfil', `Proyectos de ${user.displayName}.`), fb);
+    shell.context.replaceChildren(
+      ...ctxSection('Perfil', `El espacio de ${user.displayName}.`), fb,
+      ...(section !== 'contacto' ? [ctxButton('message', 'Enviar mensaje', () => { location.hash = `${base}/contacto`; })] : []));
   }
+
+  if (section === 'bienvenida') {
+    const editLink = h('a', { href: '#', class: 'accent', onclick: e => { e.preventDefault(); openEditProfile(); } }, 'Escríbela ahora');
+    body.append(h('section', { class: 'about' },
+      h('h3', {}, 'Bienvenida'),
+      user.about ? h('div', { class: 'about-text' }, user.about)
+        : h('div', { class: 'muted' }, user.isMe ? ['Todavía no has escrito tu bienvenida. ', editLink]
+          : `${user.displayName} todavía no ha escrito su bienvenida.`)));
+    let first = posts;
+    grid = masonry(async before => {
+      if (!before && first) { const p = first; first = null; return p; }
+      return (await api('GET', `/api/users/${encodeURIComponent(username)}?before=${before}`)).posts;
+    }, user.isMe ? 'Todavía no has publicado nada. ¡Sube tu primer proyecto!' : 'Todavía no ha publicado nada.');
+    body.append(h('h3', { class: 'sec-title' }, 'Publicaciones'), grid.el);
+  } else if (section === 'proyectos') {
+    body.append(await projectsView(user));
+  } else {
+    body.append(user.isMe ? await inboxView() : chatView(user));
+  }
+}
+
+async function projectsView(user) {
+  const { projects } = await api('GET', `/api/users/${encodeURIComponent(user.username)}/projects`);
+  const wrap = h('div', { class: 'folders' });
+  const paint = () => wrap.replaceChildren(...[
+    ...projects.map(p => h('div', { class: 'folder', title: p.name,
+      onclick: () => toast('Muy pronto: aquí dentro irá el contenido del proyecto') },
+      h('span', { class: 'f-icon' }, icon('folder')),
+      h('b', { class: 'f-name' }, p.name),
+      p.description && h('p', { class: 'f-desc' }, p.description),
+      h('small', { class: 'f-date' }, 'Creado ' + timeAgo(p.createdAt)),
+      p.mine && h('button', { class: 'icon-btn f-del', title: 'Borrar proyecto', onclick: async e => {
+        e.stopPropagation();
+        if (!confirm(`¿Borrar el proyecto "${p.name}"?`)) return;
+        try { await api('DELETE', `/api/projects/${p.id}`); projects.splice(projects.indexOf(p), 1); paint(); toast('Proyecto borrado'); }
+        catch (err) { toast(err.message); }
+      } }, icon('trash')))),
+    user.isMe && h('div', { class: 'folder new', onclick: () => openNewProject(p => { projects.unshift(p); paint(); }) },
+      h('span', { class: 'f-icon' }, icon('plus')), h('b', { class: 'f-name' }, 'Nuevo proyecto'),
+      h('small', { class: 'f-date' }, 'Crea una carpeta para un proyecto')),
+    !user.isMe && !projects.length &&
+      h('div', { class: 'empty', style: 'grid-column:1/-1' }, `${user.displayName} todavía no tiene proyectos.`)
+  ].filter(Boolean));
+  paint();
+  return wrap;
+}
+
+// =============== Chat ===============
+function chatView(other) {
+  const list = h('div', { class: 'chat-msgs' }, h('div', { class: 'chat-empty' }, 'Cargando…'));
+  const input = h('textarea', { rows: 1, maxlength: 2000, placeholder: `Escribe a ${other.displayName}…` });
+  let last = 0, loaded = false, alive = true, timer = null, pending = null, stick = true;
+  const bubble = m => h('div', { class: 'msg' + (m.mine ? ' mine' : '') }, h('div', {}, m.text),
+    h('small', {}, new Date(m.createdAt).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })));
+  const fetchNew = () => pending ||= (async () => {
+    try {
+      const { messages } = await api('GET', `/api/messages/${encodeURIComponent(other.username)}?after=${last}`);
+      if (!alive) return;
+      if (!loaded) {
+        loaded = true;
+        list.replaceChildren(messages.length ? '' : h('div', { class: 'chat-empty' }, `Aún no habéis hablado. ¡Saluda a ${other.displayName}!`));
+      }
+      if (messages.length) {
+        list.querySelector('.chat-empty')?.remove();
+        const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 120;
+        messages.forEach(m => list.append(bubble(m)));
+        last = messages[messages.length - 1].id;
+        if (nearBottom || stick) list.scrollTop = list.scrollHeight;
+        stick = false;
+        if (messages.some(m => !m.mine)) refreshUnread();
+      }
+    } catch {}
+  })().finally(() => { pending = null; });
+  const loop = async () => { await fetchNew(); if (alive) timer = setTimeout(loop, 3000); };
+  async function send() {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = ''; autosize();
+    try {
+      await api('POST', `/api/messages/${encodeURIComponent(other.username)}`, { text });
+      stick = true;
+      await pending; await fetchNew();
+    } catch (e) { toast(e.message); input.value = text; }
+  }
+  const autosize = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; };
+  input.addEventListener('input', autosize);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  const stop = () => { alive = false; clearTimeout(timer); };
+  cleanup.push(stop);
+  loop();
+  const el = h('div', { class: 'chat' },
+    h('div', { class: 'chat-head' },
+      h('a', { href: `#/u/${other.username}` }, avatar(other, 'small')),
+      h('div', { style: 'min-width:0' }, h('a', { href: `#/u/${other.username}` }, h('b', {}, other.displayName)),
+        h('div', { class: 'muted', style: 'font-size:13px' }, '@' + other.username))),
+    list,
+    h('form', { class: 'chat-form', onsubmit: e => { e.preventDefault(); send(); } },
+      input, h('button', { class: 'btn', title: 'Enviar' }, icon('send'))));
+  el.stop = stop;
+  return el;
+}
+
+async function inboxView() {
+  const { conversations } = await api('GET', '/api/conversations');
+  if (!conversations.length) {
+    return h('div', { class: 'about' }, h('h3', {}, 'Contacto'),
+      h('div', { class: 'muted' }, 'Aquí verás tus conversaciones. Entra en el perfil de alguien, abre "Contacto" y escríbele.'));
+  }
+  let current = null, chatEl = null;
+  const side = h('div', { class: 'convs' });
+  const pane = h('div', { class: 'inbox-pane' });
+  const paintSide = () => side.replaceChildren(...conversations.map(c =>
+    h('button', { class: 'conv' + (current === c.user.username ? ' active' : ''), onclick: () => open(c) },
+      avatar(c.user, 'small'),
+      h('div', { class: 'conv-txt' }, h('b', {}, c.user.displayName),
+        h('div', { class: 'last' }, (c.last.mine ? 'Tú: ' : '') + c.last.text)),
+      c.unread ? h('span', { class: 'badge' }, c.unread) : null)));
+  function open(c) {
+    current = c.user.username; c.unread = 0;
+    chatEl?.stop();
+    chatEl = chatView(c.user);
+    pane.replaceChildren(chatEl);
+    paintSide();
+  }
+  open(conversations.find(c => c.unread) || conversations[0]);
+  return h('div', { class: 'inbox' }, side, pane);
 }
 
 // =============== Acceso ===============
@@ -460,9 +674,9 @@ async function render() {
   let key = 'feed';
   try {
     if (hash.startsWith('#/u/')) {
-      const u = decodeURIComponent(hash.slice(4));
+      const [u, sec] = hash.slice(4).split('/').map(decodeURIComponent);
       key = u.toLowerCase() === me.username.toLowerCase() ? 'perfil' : '';
-      await profilePage(u);
+      await profilePage(u, sec);
     } else if (hash === '#/personas') { key = 'personas'; await peoplePage(); }
     else feedPage();
   } catch (e) {
