@@ -465,7 +465,7 @@ async function profilePage(username, section) {
   const followersEl = h('b', {}, user.followers);
   let grid = null;
 
-  const banner = h('header', { class: 'banner' + (user.banner ? '' : ' empty'),
+  const banner = h('header', { class: 'banner' + (user.banner ? '' : ' no-img'),
     style: user.banner ? `background-image:url("${user.banner}")` : null },
     user.isMe && h('button', { class: 'banner-edit', onclick: openEditProfile }, icon('image'),
       h('span', {}, user.banner ? 'Cambiar banner' : 'Añadir banner')),
