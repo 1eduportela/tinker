@@ -555,12 +555,34 @@ function paintMe() {
   if (!shell.nav.perfil.contains(shell.badge)) shell.nav.perfil.append(shell.badge);
   shell.nav.perfil.href = `#/u/${me.username}`;
   refreshUnread();
-  shell.mebox.replaceChildren(
-    h('a', { href: `#/u/${me.username}`, class: 'me-link', title: me.displayName }, avatar(me, 'small'),
-      h('span', { class: 'lbl' }, h('b', {}, me.displayName), h('small', { class: 'muted' }, '@' + me.username))),
-    h('button', { class: 'icon-btn', title: 'Cerrar sesión', onclick: async () => {
-      await api('POST', '/api/logout').catch(() => {}); me = null; location.hash = '#/'; render();
-    } }, icon('logout')));
+  const logout = async () => { await api('POST', '/api/logout').catch(() => {}); me = null; location.hash = '#/'; render(); };
+  const btn = h('button', { class: 'me-link', title: 'Tu cuenta', 'aria-haspopup': 'menu',
+    onclick: e => { e.stopPropagation(); openAccountMenu(btn, logout); } },
+    avatar(me, 'small'),
+    h('span', { class: 'lbl' }, h('b', {}, me.displayName), h('small', { class: 'muted' }, '@' + me.username)),
+    h('span', { class: 'lbl me-chev' }, icon('chevron')));
+  shell.mebox.replaceChildren(btn,
+    h('button', { class: 'icon-btn', title: 'Cerrar sesión', onclick: logout }, icon('logout')));
+}
+// Menú de la cuenta (botón de abajo a la izquierda)
+function openAccountMenu(anchor, logout) {
+  if (document.querySelector('.acct-menu')) return document.querySelector('.acct-menu').remove();
+  const close = () => { menu.remove(); document.removeEventListener('click', close); window.removeEventListener('hashchange', close); };
+  const item = (ic, label, fn, cls = '') => h('button', { class: 'acct-item ' + cls, role: 'menuitem',
+    onclick: () => { close(); fn(); } }, icon(ic), h('span', {}, label));
+  const menu = h('div', { class: 'acct-menu', role: 'menu' },
+    h('div', { class: 'acct-head' }, avatar(me, 'small'), h('div', {}, h('b', {}, me.displayName), h('small', { class: 'muted' }, '@' + me.username + (me.isAdmin ? ' · administrador' : '')))),
+    item('user', 'Ver mi perfil', () => { location.hash = `#/u/${me.username}`; }),
+    item('edit', 'Editar perfil', openEditProfile),
+    item('shield', 'Cuenta y seguridad', openSecurity),
+    h('div', { class: 'acct-sep' }),
+    item('logout', 'Cerrar sesión', logout, 'danger'));
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, r.left)}px`;
+  menu.style.bottom = `${innerHeight - r.top + 6}px`;
+  document.body.append(menu);
+  setTimeout(() => { document.addEventListener('click', close); window.addEventListener('hashchange', close); });
+  menu.addEventListener('click', e => e.stopPropagation());
 }
 const ctxSection = (title, desc) => [h('div', { class: 'ctx-title' }, title), desc && h('p', { class: 'ctx-desc' }, desc)];
 const ctxButton = (ic, label, onclick, primary) =>
@@ -799,9 +821,7 @@ async function profilePage(username, section) {
       }), true),
       ctxButton('folder', 'Nuevo proyecto', () => openNewProject(() => {
         if (section === 'proyectos') render(); else location.hash = `${base}/proyectos`;
-      })),
-      ctxButton('edit', 'Editar perfil', openEditProfile),
-      ctxButton('shield', 'Cuenta y seguridad', openSecurity));
+      })));
   } else {
     const fb = followButton(user, f => { followersEl.textContent = Number(followersEl.textContent) + (f ? 1 : -1); });
     fb.dataset.extra = ' ctx-btn'; fb.repaint();

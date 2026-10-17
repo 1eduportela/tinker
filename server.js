@@ -344,7 +344,7 @@ function saveImage(dataUrl) {
 }
 function publicUser(u) {
   return { username: u.username, displayName: u.display_name, bio: u.bio, avatar: u.avatar,
-    banner: u.banner || null, about: u.about || '' };
+    banner: u.banner || null, about: u.about || '', isAdmin: !!u.is_admin };
 }
 function userByName(username) {
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
@@ -628,7 +628,7 @@ route('POST', '/api/logout', async (req, res) => {
 
 route('GET', '/api/me', async (req, res) => {
   const u = currentUser(req);
-  send(res, 200, { user: u ? { ...publicUser(u), isAdmin: !!u.is_admin } : null, unread: u ? unreadCount(u.id) : 0 });
+  send(res, 200, { user: u ? publicUser(u) : null, unread: u ? unreadCount(u.id) : 0 });
 });
 
 route('PUT', '/api/me', async (req, res) => {
