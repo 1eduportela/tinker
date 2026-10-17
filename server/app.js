@@ -15,6 +15,7 @@ const { dispatch } = require('./http/router');
 const { sameOrigin, securityHeaders } = require('./http/security-headers');
 const { serveFile, serveUpload } = require('./http/static');
 const { HOUR, MIN } = require('./lib/units');
+const { closeOldTinker } = require('./lib/old-instance');
 const { securityLog } = require('./security/audit-log');
 const { limit, pruneRateLimits } = require('./security/rate-limit');
 const { pruneSessions } = require('./security/sessions');
@@ -80,7 +81,15 @@ function start() {
   process.on('unhandledRejection', e => console.error('Promesa rechazada sin controlar:', e));
 
   const server = createServer();
-  server.on('error', err => {
+  let retried = false;
+  server.on('error', async err => {
+    if (err.code === 'EADDRINUSE' && !retried) {
+      retried = true;
+      if (await closeOldTinker(PORT)) {
+        console.log('\n  Habia un Tinker antiguo abierto sin ventana: lo he cerrado y arranco el nuevo.');
+        return setTimeout(() => server.listen(PORT, '0.0.0.0'), 500);
+      }
+    }
     if (err.code === 'EADDRINUSE') {
       console.error('\n  ATENCION: Tinker ya esta abierto en otra ventana (el puerto ' + PORT + ' esta ocupado).');
       console.error('  Cierra TODAS las ventanas negras de Tinker y vuelve a abrir "Iniciar red social.bat".');
