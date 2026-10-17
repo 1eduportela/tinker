@@ -687,6 +687,9 @@ async function openSecurity() {
       h('section', { class: 'sec-block' }, h('h3', {}, icon('monitor'), `Sesiones abiertas (${data.sessions.length})`),
         h('p', { class: 'muted small-note' }, 'Si ves un dispositivo que no reconoces, ciérralo y cambia tu contraseña.'),
         sessions, closeAll && h('div', { class: 'row', style: 'margin-top:10px' }, h('div', { class: 'spacer' }), closeAll)),
+      h('section', { class: 'sec-block' }, h('h3', {}, icon('folder'), 'Tu espacio'),
+        h('div', { class: 'quota' }, h('div', { class: 'quota-fill', style: `width:${Math.min(100, data.storage.used / data.storage.quota * 100).toFixed(1)}%` })),
+        h('p', { class: 'muted small-note' }, `Usas ${fmtSize(data.storage.used)} de ${fmtSize(data.storage.quota)}. Hoy has subido ${fmtSize(data.storage.today)} de ${fmtSize(data.storage.dailyQuota)} permitidos al día.`)),
       h('section', { class: 'sec-block danger-zone' }, h('h3', {}, icon('trash'), 'Zona peligrosa'),
         h('p', { class: 'muted small-note' }, 'Borra tu cuenta y todo tu contenido de Tinker.'), delBtn));
   }
@@ -913,7 +916,8 @@ const extOf = name => (name.includes('.') ? name.split('.').pop().toLowerCase() 
 function fmtSize(n) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 // Recorre carpetas soltadas con arrastrar y soltar

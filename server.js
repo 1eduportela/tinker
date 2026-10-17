@@ -24,6 +24,11 @@ const MAX_FILE = 50 * 1024 * 1024;
 const MAX_IMAGE = 15 * 1024 * 1024;
 const MAX_VIDEO = 300 * 1024 * 1024;
 const MAX_MEDIA_PER_POST = 10;
+// Cuotas por persona (se pueden cambiar con variables de entorno)
+const MB = 1024 * 1024;
+const USER_QUOTA = (Number(process.env.TINKER_QUOTA_MB) || 3000) * MB;      // espacio total
+const DAILY_QUOTA = (Number(process.env.TINKER_DAILY_MB) || 1500) * MB;     // subida en 24 h
+const MIN_FREE_DISK = (Number(process.env.TINKER_MIN_FREE_MB) || 1024) * MB; // se para si el disco baja de esto
 const PUBLIC = path.join(ROOT, 'public');
 fs.mkdirSync(UPLOADS, { recursive: true });
 fs.mkdirSync(FILES, { recursive: true });
@@ -149,6 +154,13 @@ if (!userCols.includes('banner')) db.exec('ALTER TABLE users ADD COLUMN banner T
 if (!userCols.includes('about')) db.exec("ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''");
 if (!userCols.includes('invited_by')) db.exec('ALTER TABLE users ADD COLUMN invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL');
 if (!userCols.includes('pass_params')) db.exec("ALTER TABLE users ADD COLUMN pass_params TEXT NOT NULL DEFAULT 'scrypt:16384:8:1'");
+const mediaCols = db.prepare('PRAGMA table_info(media_uploads)').all().map(c => c.name);
+if (!mediaCols.includes('size')) {
+  db.exec('ALTER TABLE media_uploads ADD COLUMN size INTEGER NOT NULL DEFAULT 0');
+  for (const r of db.prepare('SELECT url FROM media_uploads').all()) {
+    try { db.prepare('UPDATE media_uploads SET size = ? WHERE url = ?').run(fs.statSync(path.join(UPLOADS, path.basename(r.url))).size, r.url); } catch {}
+  }
+}
 const projectCols = db.prepare('PRAGMA table_info(projects)').all().map(c => c.name);
 if (!projectCols.includes('readme')) db.exec("ALTER TABLE projects ADD COLUMN readme TEXT NOT NULL DEFAULT ''");
 const postCols = db.prepare('PRAGMA table_info(posts)').all().map(c => c.name);
@@ -246,7 +258,7 @@ function readRaw(req, limit) {
     let size = 0; const chunks = [];
     req.on('data', c => {
       size += c.length;
-      if (size > limit) { reject(new HttpError(413, 'Archivo demasiado grande (max. 50 MB)')); req.resume(); return; }
+      if (size > limit) { reject(new HttpError(413, limit < MAX_FILE ? 'No te queda espacio suficiente para este archivo' : 'Archivo demasiado grande (max. 50 MB)')); req.resume(); return; }
       chunks.push(c);
     });
     req.on('end', () => resolve(Buffer.concat(chunks)));
@@ -409,6 +421,64 @@ function securityLog(event, req, detail = '') {
   } catch {}
 }
 
+// ---------- Cuotas de espacio ----------
+const DAY_MS = 24 * 3600 * 1000;
+function storageOf(userId) {
+  const since = Date.now() - DAY_MS;
+  const media = db.prepare('SELECT COALESCE(SUM(size), 0) AS total, COALESCE(SUM(CASE WHEN created_at > ? THEN size ELSE 0 END), 0) AS day FROM media_uploads WHERE user_id = ?').get(since, userId);
+  const files = db.prepare(`SELECT COALESCE(SUM(f.size), 0) AS total, COALESCE(SUM(CASE WHEN f.created_at > ? THEN f.size ELSE 0 END), 0) AS day
+    FROM project_files f JOIN projects p ON p.id = f.project_id WHERE p.user_id = ?`).get(since, userId);
+  return { used: media.total + files.total, today: media.day + files.day, quota: USER_QUOTA, dailyQuota: DAILY_QUOTA };
+}
+const fmtMB = n => n >= 1024 * MB ? `${(n / 1024 / MB).toFixed(1)} GB` : n >= MB ? `${Math.round(n / MB)} MB` : `${Math.max(0, Math.round(n / 1024))} KB`;
+// Cuantos bytes puede subir ahora esta persona (o error si no le queda nada)
+function uploadAllowance(req, userId) {
+  try {
+    const st = fs.statfsSync(DATA);
+    if (st.bavail * st.bsize < MIN_FREE_DISK) throw new HttpError(507, 'El servidor se esta quedando sin espacio. Avisa al administrador.');
+  } catch (e) { if (e instanceof HttpError) throw e; }
+  const s = storageOf(userId);
+  const left = Math.min(s.quota - s.used, s.dailyQuota - s.today);
+  if (s.quota - s.used <= 0) throw new HttpError(413, `Te has quedado sin espacio: usas ${fmtMB(s.used)} de ${fmtMB(s.quota)}. Borra algo para seguir subiendo.`);
+  if (s.dailyQuota - s.today <= 0) throw new HttpError(413, `Has llegado al limite de subida de hoy (${fmtMB(s.dailyQuota)}). Prueba manana.`);
+  const declared = Number(req.headers['content-length'] || 0);
+  if (declared > left) throw new HttpError(413, s.quota - s.used < s.dailyQuota - s.today
+    ? `No te queda espacio para este archivo: te quedan ${fmtMB(s.quota - s.used)}.`
+    : `Este archivo supera lo que puedes subir hoy (te quedan ${fmtMB(s.dailyQuota - s.today)}).`);
+  return left;
+}
+
+// ---------- Limpieza de archivos huerfanos (al arrancar y cada hora) ----------
+function cleanupOrphans() {
+  const now = Date.now();
+  let removed = 0;
+  const referenced = new Set();
+  for (const r of db.prepare('SELECT url, poster FROM post_media').all()) { referenced.add(r.url); if (r.poster) referenced.add(r.poster); }
+  for (const r of db.prepare('SELECT image FROM posts WHERE image IS NOT NULL').all()) referenced.add(r.image);
+  for (const r of db.prepare('SELECT avatar, banner FROM users').all()) { if (r.avatar) referenced.add(r.avatar); if (r.banner) referenced.add(r.banner); }
+  // Fotos y videos subidos que nunca llegaron a publicarse (6 h de margen)
+  for (const r of db.prepare('SELECT url FROM media_uploads WHERE created_at < ?').all(now - 6 * 3600 * 1000)) {
+    if (!referenced.has(r.url)) { fs.rm(path.join(UPLOADS, path.basename(r.url)), () => {}); db.prepare('DELETE FROM media_uploads WHERE url = ?').run(r.url); removed++; }
+  }
+  const known = new Set(db.prepare('SELECT url FROM media_uploads').all().map(r => path.basename(r.url)));
+  for (const u of referenced) known.add(path.basename(u));
+  for (const name of fs.readdirSync(UPLOADS)) {
+    let st; try { st = fs.statSync(path.join(UPLOADS, name)); } catch { continue; }
+    const age = now - st.mtimeMs;
+    if ((name.startsWith('tmp-') && age > 3600 * 1000) || (!name.startsWith('tmp-') && !known.has(name) && age > DAY_MS)) {
+      fs.rm(path.join(UPLOADS, name), () => {}); removed++;
+    }
+  }
+  const stored = new Set(db.prepare('SELECT stored FROM project_files').all().map(r => r.stored));
+  for (const name of fs.readdirSync(FILES)) {
+    let st; try { st = fs.statSync(path.join(FILES, name)); } catch { continue; }
+    if (!stored.has(name) && now - st.mtimeMs > 3600 * 1000) { fs.rm(path.join(FILES, name), () => {}); removed++; }
+  }
+  if (removed) console.log(`  Limpieza: ${removed} archivo(s) sin usar borrados`);
+}
+try { cleanupOrphans(); } catch (e) { console.error('Error en la limpieza:', e.message); }
+setInterval(() => { try { cleanupOrphans(); } catch (e) { console.error('Error en la limpieza:', e.message); } }, 3600 * 1000).unref();
+
 // ---------- Invitaciones ----------
 // Codigos de un solo uso tipo TNK-ABCD-EF23 (40 bits aleatorios). En la base de datos solo se guarda su huella.
 const INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -567,6 +637,7 @@ route('GET', '/api/me/security', async (req, res) => {
   send(res, 200, {
     sessions: rows.map(r => ({ id: r.id.slice(0, 16), current: r.id === me.session_id, createdAt: r.created_at,
       lastUsed: r.last_used, ip: r.ip, device: describeAgent(r.agent) })),
+    storage: storageOf(me.id),
   });
 });
 
@@ -677,16 +748,18 @@ route('POST', '/api/media', async (req, res, url) => {
   const me = requireUser(req);
   limit('media:' + me.id, 120, HOUR, 'Has subido demasiados archivos seguidos');
   const want = url.searchParams.get('kind') === 'video' ? 'video' : 'image';
-  const limit = want === 'video' ? MAX_VIDEO : MAX_IMAGE;
+  const allowance = uploadAllowance(req, me.id);
+  const maxSize = Math.min(want === 'video' ? MAX_VIDEO : MAX_IMAGE, allowance);
   const tmp = path.join(UPLOADS, 'tmp-' + crypto.randomBytes(8).toString('hex'));
   await new Promise((resolve, reject) => {
     let size = 0, failed = false;
     const out = fs.createWriteStream(tmp);
     req.on('data', c => {
       size += c.length;
-      if (size > limit && !failed) {
+      if (size > maxSize && !failed) {
         failed = true; req.unpipe(out); out.destroy(); fs.rm(tmp, () => {}); req.resume();
-        reject(new HttpError(413, want === 'video' ? 'El video pasa de 300 MB' : 'La foto pasa de 15 MB'));
+        reject(new HttpError(413, maxSize < (want === 'video' ? MAX_VIDEO : MAX_IMAGE) ? 'No te queda espacio suficiente para este archivo'
+          : want === 'video' ? 'El video pasa de 300 MB' : 'La foto pasa de 15 MB'));
       }
     });
     req.pipe(out);
@@ -702,7 +775,8 @@ route('POST', '/api/media', async (req, res, url) => {
   const name = crypto.randomBytes(12).toString('hex') + '.' + type.ext;
   fs.renameSync(tmp, path.join(UPLOADS, name));
   const mediaUrl = '/uploads/' + name;
-  db.prepare('INSERT INTO media_uploads (url, user_id, kind, created_at) VALUES (?, ?, ?, ?)').run(mediaUrl, me.id, type.kind, Date.now());
+  const finalSize = fs.statSync(path.join(UPLOADS, name)).size;
+  db.prepare('INSERT INTO media_uploads (url, user_id, kind, created_at, size) VALUES (?, ?, ?, ?, ?)').run(mediaUrl, me.id, type.kind, Date.now(), finalSize);
   send(res, 200, { url: mediaUrl, kind: type.kind });
 });
 
@@ -908,7 +982,9 @@ route('POST', '/api/projects/(\\d+)/files', async (req, res, url, [id]) => {
   limit('files:' + me.id, 600, HOUR, 'Has subido demasiados archivos seguidos');
   const p = ownProject(id, me);
   const filePath = cleanPath(url.searchParams.get('path'));
-  const data = await readRaw(req, MAX_FILE);
+  const allowance = uploadAllowance(req, me.id);
+  if (db.prepare('SELECT COUNT(*) AS n FROM project_files WHERE project_id = ?').get(p.id).n >= 2000) throw new HttpError(400, 'Este proyecto ya tiene 2.000 archivos, que es el maximo');
+  const data = await readRaw(req, Math.min(MAX_FILE, allowance));
   const stored = crypto.randomBytes(16).toString('hex');
   fs.writeFileSync(path.join(FILES, stored), data);
   const old = db.prepare('SELECT id, stored FROM project_files WHERE project_id = ? AND path = ?').get(p.id, filePath);
