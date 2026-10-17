@@ -631,6 +631,17 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.on('error', err => {
+  if (err.code === 'EADDRINUSE') {
+    console.error('\n  ATENCION: Tinker ya esta abierto en otra ventana (el puerto ' + PORT + ' esta ocupado).');
+    console.error('  Cierra TODAS las ventanas negras de Tinker y vuelve a abrir "Iniciar red social.bat".');
+    console.error('  Si no encuentras la otra ventana: Administrador de tareas > Node.js > Finalizar tarea.\n');
+  } else {
+    console.error('\n  No se pudo arrancar Tinker:', err.message, '\n');
+  }
+  process.exit(1);
+});
+
 server.listen(PORT, '0.0.0.0', () => {
   const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
   console.log('\n  Tinker esta en marcha');
