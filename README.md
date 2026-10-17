@@ -10,9 +10,33 @@
 Sin dependencias: solo Node.js (usa el SQLite integrado).
 
 ## Estructura
-- `server.js`: servidor y API.
-- `public/`: la web (HTML, CSS y JS).
-- `data/`: base de datos, fotos, archivos de los proyectos y configuración. **No se sube al repositorio.**
+```
+server.js            arranque (llama a server/app.js)
+server/              el servidor
+  app.js             servidor HTTP: protecciones comunes y reparto de cada petición
+  config.js          carpetas, límites, cuotas y data/config.json
+  db.js              tablas de SQLite y migraciones
+  http/              piezas HTTP: enrutador, leer peticiones, validar, archivos estáticos, cabeceras de seguridad
+  security/          contraseñas, sesiones, límites de uso, bloqueo por fallos y registro de seguridad
+  services/          lógica de cada tema, compartida entre rutas: usuarios, publicaciones, proyectos, fotos, espacio...
+  routes/            la API, un archivo por tema (auth, account, posts, projects, files, messages...)
+  lib/               utilidades sueltas (unidades, huellas SHA-256)
+public/              la web
+  index.html         página vacía que carga los estilos y js/main.js
+  css/               estilos por tema (base, componentes, estructura, publicaciones, perfil, proyectos...)
+  js/main.js         arranque de la web
+  js/router.js       qué página se pinta según la dirección (#/u/..., #/p/...)
+  js/core/           sin interfaz: crear elementos, API, estado compartido, formatos, Markdown
+  js/ui/             componentes: iconos, ventanas, carrusel, desplegable, avisos, avatar
+  js/media/          fotos y vídeos: reducir, portada de vídeo, subidas con progreso
+  js/layout/         menú lateral fijo y menú de la cuenta
+  js/features/       cada parte de la red: auth, feed, posts, people, profile, projects, chat, account
+data/                base de datos, fotos, archivos de proyectos y configuración (no se sube al repositorio)
+demo/                perfiles de prueba
+tests/               pruebas de seguridad
+```
+Las dependencias van siempre en un sentido: rutas → servicios → base de datos, y páginas → componentes → núcleo.
+Ningún módulo depende de otro que a su vez dependa de él.
 
 ## Cómo funciona
 - **Proyectos** (como en GitHub): archivos, README y Multimedia.
