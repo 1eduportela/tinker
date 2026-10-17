@@ -1,0 +1,27 @@
+/* Base: colores (variables), tipografía, formularios y utilidades de maquetación. */
+
+:root {
+  --bg: #e2e2e2; --side: #e9e9e9; --panel: #ffffff; --text: #111111; --muted: #6b6b6b; --line: #d4d4d4;
+  --field: #f4f4f4; --accent: #fdf33c; --on-accent: #111111; --accent-2: #ffffff; --ink: #111111;
+  --danger: #e03131; --r: 8px; --sb: 264px;
+  --shadow: 0 1px 2px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161616; --side: #1d1d1d; --panel: #242424; --text: #f2f2f2; --muted: #9a9a9a; --line: #333333;
+    --field: #1b1b1b; --accent-2: #2e2e2e; --ink: #f2f2f2; --shadow: none; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+body.noscroll { overflow: hidden; }
+a { color: inherit; text-decoration: none; }
+a.accent { color: var(--text); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+button, input, textarea { font: inherit; color: inherit; }
+input[type=text], input[type=password], textarea { width: 100%; background: var(--field); border: 1px solid var(--line);
+  border-radius: 5px; padding: 10px 12px; outline: none; }
+input:focus, textarea:focus { border-color: var(--ink); }
+textarea { resize: vertical; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; font-weight: 600; }
+.muted { color: var(--muted); }
+.row { display: flex; align-items: center; gap: 10px; }
+.spacer { flex: 1; }

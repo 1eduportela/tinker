@@ -1,0 +1,8 @@
+/* Pantalla de acceso. */
+
+/* ---------- Acceso ---------- */
+.auth { max-width: 380px; margin: 10vh auto 0; padding: 0 16px; }
+.auth-logo { display: flex; justify-content: center; align-items: center; gap: 12px; font-size: 36px; font-weight: 800; letter-spacing: -.5px; text-transform: uppercase; }
+.auth-logo .logo-mark { width: 48px; height: 48px; border-radius: 5px; }
+.auth .lead { text-align: center; color: var(--muted); margin: 6px 0 22px; }
+.auth form { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 18px; box-shadow: var(--shadow); }

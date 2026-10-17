@@ -1,0 +1,92 @@
+/* Proyecto: cabecera, archivos (estilo GitHub), visor de archivos y README en Markdown. */
+
+/* Pagina de proyecto */
+.proj-head { display: flex; gap: 18px; align-items: flex-start; background: var(--panel); border-radius: 11px; padding: 24px 26px;
+  margin-bottom: 14px; box-shadow: var(--shadow); }
+.proj-icon { width: 56px; height: 56px; border-radius: 8px; background: var(--accent); color: var(--on-accent); display: grid;
+  place-items: center; flex: none; }
+.proj-icon .ic { width: 28px; height: 28px; }
+.proj-path { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 24px; letter-spacing: -.4px; }
+.proj-path b { font-weight: 800; overflow-wrap: anywhere; }
+.proj-path .slash { color: var(--muted); font-weight: 300; }
+.proj-owner { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-weight: 600; }
+.proj-owner:hover { color: var(--text); }
+.proj-owner .avatar.xs { width: 26px; height: 26px; font-size: 12px; }
+.proj-desc { margin: 6px 0 0; color: var(--muted); max-width: 720px; }
+.proj-stats { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; font-size: 13px; color: var(--muted); }
+.proj-stats span { display: inline-flex; align-items: center; gap: 6px; }
+.proj-stats .ic { width: 15px; height: 15px; }
+
+/* Archivos */
+.files { background: var(--panel); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; transition: box-shadow .15s; }
+.files.over { box-shadow: 0 0 0 3px var(--accent); }
+.files-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; font-weight: 700; }
+.crumb { background: none; border: 0; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-weight: 700; }
+.crumb:hover { background: var(--field); }
+.crumbs .slash { color: var(--muted); }
+.files-count { font-size: 13px; }
+
+.files-list { display: flex; flex-direction: column; }
+.frow { display: grid; grid-template-columns: minmax(0, 1fr) 110px 110px 76px; align-items: center; gap: 10px; padding: 0 14px 0 18px;
+  min-height: 46px; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; cursor: pointer; width: 100%; }
+.frow:last-child { border-bottom: 0; }
+.frow:hover { background: var(--field); }
+.frow.up { grid-template-columns: 1fr; }
+.fname { display: flex; align-items: center; gap: 10px; min-width: 0; font-weight: 500; }
+.ftxt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frow.dir .ftxt { font-weight: 700; }
+.ficon { display: inline-flex; color: var(--muted); }
+.ficon .ic { width: 18px; height: 18px; }
+.frow.dir .ficon { color: #c9a800; }
+.fmeta, .fdate { font-size: 13px; white-space: nowrap; }
+.factions { display: flex; justify-content: flex-end; gap: 2px; opacity: .55; }
+.frow:hover .factions { opacity: 1; }
+.factions .icon-btn .ic { width: 17px; height: 17px; }
+.files-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; padding: 56px 20px; }
+.files-empty .ic { width: 36px; height: 36px; color: var(--muted); margin-bottom: 4px; }
+.files-empty.can-drop { cursor: pointer; margin: 14px; border: 2px dashed var(--line); border-radius: 7px; }
+.files-empty.can-drop:hover { border-color: var(--ink); }
+
+.modal.viewer-modal { max-width: 980px; }
+.viewer-head { display: flex; align-items: center; gap: 10px; padding-right: 40px; margin-bottom: 14px; overflow-wrap: anywhere; }
+.viewer-body { max-height: calc(100vh - 220px); overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.viewer-body img, .viewer-body video { display: block; max-width: 100%; margin: 0 auto; }
+.viewer-body .pdf { width: 100%; height: calc(100vh - 240px); border: 0; display: block; }
+.viewer-body .md { padding-top: 10px; }
+pre.code { margin: 0; padding: 12px 0; font: 13px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace; counter-reset: ln; }
+pre.code .ln { display: block; padding-right: 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre.code .ln i { display: inline-block; width: 48px; padding-right: 14px; text-align: right; color: var(--muted); font-style: normal; user-select: none; }
+.viewer-none { text-align: center; padding: 50px 20px; }
+.viewer-none .ic { width: 42px; height: 42px; color: var(--muted); }
+.viewer-none p { margin: 6px 0 0; }
+
+/* README */
+.readme { background: var(--panel); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; }
+.readme-head { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.readme-head .ic { width: 18px; height: 18px; color: var(--muted); }
+.readme-edit { padding: 16px 18px 18px; }
+.readme-ta { font: 14px/1.6 ui-monospace, "Cascadia Code", Consolas, monospace; min-height: 360px; }
+.readme-preview { min-height: 360px; border: 1px solid var(--line); border-radius: 5px; }
+.md { padding: 6px 30px 26px; font-size: 15.5px; line-height: 1.65; overflow-wrap: anywhere; }
+.md h1, .md h2 { font-weight: 800; letter-spacing: -.3px; padding-bottom: 6px; border-bottom: 1px solid var(--line); margin: 24px 0 12px; }
+.md h1 { font-size: 28px; } .md h2 { font-size: 22px; } .md h3 { font-size: 18px; margin: 20px 0 8px; } .md h4 { margin: 16px 0 6px; }
+.md p { margin: 10px 0; }
+.md ul, .md ol { padding-left: 24px; margin: 10px 0; }
+.md li { margin: 3px 0; }
+.md a { text-decoration: underline; text-underline-offset: 3px; font-weight: 600; }
+.md code { font: 13.5px ui-monospace, "Cascadia Code", Consolas, monospace; background: var(--field); padding: 2px 6px; border-radius: 3px; }
+.md pre { background: #151515; color: #f2f2f2; padding: 14px 16px; border-radius: 6px; overflow-x: auto; }
+.md pre code { background: none; padding: 0; color: inherit; }
+.md blockquote { margin: 10px 0; padding: 4px 14px; border-left: 4px solid var(--accent); color: var(--muted); }
+.md img { max-width: 100%; border-radius: 5px; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0; }
+
+@media (max-width: 820px) {
+  .proj-head { padding: 18px; gap: 12px; }
+  .proj-icon { width: 42px; height: 42px; }
+  .proj-path { font-size: 19px; }
+  .frow { grid-template-columns: minmax(0, 1fr) 70px 64px; }
+  .fdate { display: none; }
+  .files-count { display: none; }
+}

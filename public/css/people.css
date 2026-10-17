@@ -1,0 +1,10 @@
+/* Personas. */
+
+/* Personas */
+.people { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.person { background: var(--panel); border-radius: var(--r); box-shadow: var(--shadow); padding: 24px 16px 18px; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.person .avatar { width: 72px; height: 72px; font-size: 28px; margin-bottom: 6px; }
+.person b { font-size: 16px; }
+.person p { margin: 4px 0 8px; font-size: 13px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.person .btn { margin-top: auto; }

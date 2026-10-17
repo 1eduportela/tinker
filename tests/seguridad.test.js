@@ -85,7 +85,7 @@ test('una dirección mal formada no tumba el servidor', async () => {
 });
 
 test('cabeceras de seguridad en todas las respuestas', async () => {
-  for (const url of ['/', '/api/me', '/app.js']) {
+  for (const url of ['/', '/api/me', '/js/main.js', '/css/base.css']) {
     const r = await fetch(srv.base + url);
     assert.match(r.headers.get('content-security-policy') || '', /default-src 'self'/);
     assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
@@ -251,8 +251,8 @@ test('cambiar contraseña cierra las demás sesiones', async () => {
 });
 
 test('el Markdown del README no permite colar HTML ni enlaces javascript:', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
-  const code = src.slice(src.indexOf('function markdown'), src.indexOf('function readmeView'));
+  // El módulo del Markdown no depende de nada: se ejecuta tal cual quitando la palabra "export"
+  const code = fs.readFileSync(path.join(ROOT, 'public', 'js', 'core', 'markdown.js'), 'utf8').replace(/^export /gm, '');
   const ctx = {}; vm.createContext(ctx); vm.runInContext(code + '; this.markdown = markdown;', ctx);
   const html = ctx.markdown('# Hola\n<img src=x onerror=alert(1)>\n[a](javascript:alert(1))\n```\n<script>x</script>\n```');
   assert.ok(!/<img src=x/i.test(html) && !/<script>/i.test(html) && !/href="javascript:/i.test(html), html);
