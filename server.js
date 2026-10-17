@@ -137,6 +137,7 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
 const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!userCols.includes('banner')) db.exec('ALTER TABLE users ADD COLUMN banner TEXT');
 if (!userCols.includes('about')) db.exec("ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''");
+if (!userCols.includes('pass_params')) db.exec("ALTER TABLE users ADD COLUMN pass_params TEXT NOT NULL DEFAULT 'scrypt:16384:8:1'");
 const projectCols = db.prepare('PRAGMA table_info(projects)').all().map(c => c.name);
 if (!projectCols.includes('readme')) db.exec("ALTER TABLE projects ADD COLUMN readme TEXT NOT NULL DEFAULT ''");
 const postCols = db.prepare('PRAGMA table_info(posts)').all().map(c => c.name);
@@ -155,15 +156,53 @@ for (const r of db.prepare("SELECT id, text FROM posts WHERE title = '' AND text
   db.prepare('UPDATE posts SET title = ? WHERE id = ?').run(first.length > 80 ? first.slice(0, 77) + '...' : first, r.id);
 }
 
+// ---------- Contraseñas ----------
+// scrypt con parametros guardados por usuario: si se endurecen, las contraseñas antiguas
+// se re-cifran solas la siguiente vez que esa persona inicia sesion.
+const PASS_PARAMS = 'scrypt:32768:8:1';   // N=32768 -> 32 MB de memoria por calculo
+function parseParams(p) {
+  const [, N, r, pp] = String(p || 'scrypt:16384:8:1').split(':').map(Number);
+  return { N: N || 16384, r: r || 8, p: pp || 1, maxmem: 128 * (N || 16384) * (r || 8) * 2 };
+}
+function hashPassword(pw, salt, params = PASS_PARAMS) {
+  return crypto.scryptSync(String(pw), salt, 64, parseParams(params)).toString('hex');
+}
+function hashPasswordAsync(pw, salt, params = PASS_PARAMS) {
+  return new Promise((resolve, reject) => crypto.scrypt(String(pw), salt, 64, parseParams(params),
+    (err, key) => err ? reject(err) : resolve(key.toString('hex'))));
+}
+async function verifyPassword(pw, user) {
+  const a = Buffer.from(await hashPasswordAsync(pw, user.salt, user.pass_params), 'hex');
+  const b = Buffer.from(user.pass_hash, 'hex');
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (ok && user.pass_params !== PASS_PARAMS && user.id) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    db.prepare('UPDATE users SET pass_hash = ?, salt = ?, pass_params = ? WHERE id = ?')
+      .run(await hashPasswordAsync(pw, salt), salt, PASS_PARAMS, user.id);
+  }
+  return ok;
+}
+const COMMON_PASSWORDS = new Set(`123456 password 12345678 qwerty 123456789 12345 1234 111111 1234567 dragon 123123 baseball
+abc123 football monkey letmein 696969 shadow master 666666 qwertyuiop 123321 mustang 1234567890 michael 654321 superman
+1qaz2wsx 7777777 121212 000000 qazwsx 123qwe killer trustno1 jordan jennifer zxcvbnm asdfgh hunter buster soccer harley
+batman andrew tigger sunshine iloveyou charlie robert thomas hockey ranger daniel starwars 112233 george computer
+michelle jessica pepper 1111 zxcvbn 555555 11111111 131313 freedom 777777 pass maggie 159753 aaaaaa ginger princess
+joshua cheese amanda summer love ashley nicole chelsea biteme matthew access yankees 987654321 dallas austin thunder
+taylor matrix contraseña contrasena contraseña1 12341234 tinker tinker123 cacharrando password1 password123 qwerty123
+admin admin123 administrador welcome holamundo hola1234 hola123 barcelona realmadrid españa espana madrid valencia sevilla
+teamo tequiero 00000000 87654321 abcd1234 a1b2c3d4 qwer1234 asdf1234 1q2w3e4r 1q2w3e4r5t secreto secreto1 usuario
+usuario1 iloveyou1 football1 princesa futbol futbol123 pokemon minecraft`.split(/\s+/));
+function passwordProblem(pw, username) {
+  if (typeof pw !== 'string' || pw.length < 8) return 'La contrasena debe tener al menos 8 caracteres';
+  if (pw.length > 200) return 'La contrasena es demasiado larga (max. 200)';
+  const low = pw.toLowerCase();
+  if (COMMON_PASSWORDS.has(low) || COMMON_PASSWORDS.has(low.replace(/[0-9!.]+$/, ''))) return 'Esa contrasena es demasiado comun: elige otra';
+  if (/^(.)\1+$/.test(pw)) return 'La contrasena no puede ser un mismo caracter repetido';
+  if (username && username.length >= 3 && low.includes(String(username).toLowerCase())) return 'La contrasena no puede contener tu nombre de usuario';
+  return null;
+}
+
 // ---------- Utilidades ----------
-function hashPassword(pw, salt) {
-  return crypto.scryptSync(pw, salt, 64).toString('hex');
-}
-function checkPassword(pw, salt, hash) {
-  const a = Buffer.from(hashPassword(pw, salt), 'hex');
-  const b = Buffer.from(hash, 'hex');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
 function send(res, status, obj, headers = {}) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...headers });
   res.end(JSON.stringify(obj));
@@ -376,11 +415,12 @@ route('POST', '/api/register', async (req, res) => {
     throw new HttpError(403, 'Codigo de invitacion incorrecto');
   }
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) throw new HttpError(400, 'El usuario debe tener 3-20 letras, numeros o _');
-  if (password.length < 6) throw new HttpError(400, 'La contrasena debe tener al menos 6 caracteres');
+  const weak = passwordProblem(password, username);
+  if (weak) throw new HttpError(400, weak);
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) throw new HttpError(409, 'Ese usuario ya existe');
   const salt = crypto.randomBytes(16).toString('hex');
-  const info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(username, displayName, hashPassword(password, salt), salt, Date.now());
+  const info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, pass_params, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(username, displayName, await hashPasswordAsync(password, salt), salt, PASS_PARAMS, Date.now());
   securityLog('registro', req, username);
   return login(req, res, Number(info.lastInsertRowid));
 });
@@ -403,7 +443,7 @@ function login(req, res, userId) {
 
 // Hash falso para tardar lo mismo aunque el usuario no exista (no se puede saber si existe midiendo tiempos)
 const DUMMY_SALT = crypto.randomBytes(16).toString('hex');
-const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'), DUMMY_SALT);
+const DUMMY_USER = { salt: DUMMY_SALT, pass_params: PASS_PARAMS, pass_hash: hashPassword(crypto.randomBytes(16).toString('hex'), DUMMY_SALT) };
 const LOGIN_MAX_FAILS = 5, LOGIN_LOCK = 15 * MIN;
 route('POST', '/api/login', async (req, res) => {
   const ip = clientIp(req);
@@ -415,7 +455,7 @@ route('POST', '/api/login', async (req, res) => {
     if (peek(k) >= max) { const bk = buckets.get(k); throw tooMany(Math.ceil((bk.reset - Date.now()) / 1000), 'Demasiados intentos fallidos'); }
   }
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(name);
-  const ok = u ? checkPassword(String(b.password || ''), u.salt, u.pass_hash) : (checkPassword('x', DUMMY_SALT, DUMMY_HASH), false);
+  const ok = u ? await verifyPassword(String(b.password || ''), u) : (await verifyPassword('x', DUMMY_USER), false);
   if (!ok) {
     const r1 = hit(userKey, LOGIN_MAX_FAILS, LOGIN_LOCK); hit(ipKey, 20, LOGIN_LOCK);
     securityLog('login_fallido', req, name);
@@ -454,6 +494,84 @@ route('PUT', '/api/me', async (req, res) => {
   db.prepare('UPDATE users SET display_name = ?, bio = ?, about = ?, avatar = ?, banner = ? WHERE id = ?')
     .run(displayName, bio, about, avatar, banner, me.id);
   send(res, 200, { user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(me.id)) });
+});
+
+// ---------- Cuenta y seguridad ----------
+function describeAgent(ua) {
+  ua = String(ua || '');
+  const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox'
+    : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Navegador';
+  const osName = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iPhone/iPad'
+    : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : 'otro sistema';
+  return `${browser} en ${osName}`;
+}
+// Verifica la contraseña actual contando los fallos igual que en el inicio de sesion
+async function confirmPassword(req, me, pw) {
+  const key = 'loginfail:u:' + me.username.toLowerCase();
+  if (peek(key) >= LOGIN_MAX_FAILS) { const bk = buckets.get(key); throw tooMany(Math.ceil((bk.reset - Date.now()) / 1000), 'Demasiados intentos fallidos'); }
+  if (!(await verifyPassword(String(pw || ''), me))) {
+    hit(key, LOGIN_MAX_FAILS, LOGIN_LOCK);
+    securityLog('contrasena_actual_incorrecta', req, me.username);
+    throw new HttpError(403, 'La contrasena actual no es correcta');
+  }
+  clearKey(key);
+}
+
+route('GET', '/api/me/security', async (req, res) => {
+  const me = requireUser(req);
+  const rows = db.prepare('SELECT * FROM sessions WHERE user_id = ? ORDER BY last_used DESC').all(me.id);
+  send(res, 200, {
+    sessions: rows.map(r => ({ id: r.id.slice(0, 16), current: r.id === me.session_id, createdAt: r.created_at,
+      lastUsed: r.last_used, ip: r.ip, device: describeAgent(r.agent) })),
+  });
+});
+
+route('POST', '/api/me/password', async (req, res) => {
+  const me = requireUser(req);
+  limit('pwchange:' + me.id, 10, HOUR, 'Demasiados cambios de contrasena');
+  const b = await readBody(req);
+  await confirmPassword(req, me, b.current);
+  const weak = passwordProblem(b.next, me.username);
+  if (weak) throw new HttpError(400, weak);
+  if (b.next === b.current) throw new HttpError(400, 'La nueva contrasena tiene que ser distinta');
+  const salt = crypto.randomBytes(16).toString('hex');
+  db.prepare('UPDATE users SET pass_hash = ?, salt = ?, pass_params = ? WHERE id = ?')
+    .run(await hashPasswordAsync(b.next, salt), salt, PASS_PARAMS, me.id);
+  // Se cierran todas las demas sesiones y esta se renueva
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(me.id);
+  securityLog('contrasena_cambiada', req, me.username);
+  login(req, res, me.id);
+});
+
+route('POST', '/api/me/sessions/close-others', async (req, res) => {
+  const me = requireUser(req);
+  const r = db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?').run(me.id, me.session_id);
+  securityLog('sesiones_cerradas', req, `${me.username} (${r.changes})`);
+  send(res, 200, { closed: r.changes });
+});
+
+route('DELETE', '/api/me/sessions/([a-f0-9]{16})', async (req, res, url, [prefix]) => {
+  const me = requireUser(req);
+  const r = db.prepare("DELETE FROM sessions WHERE user_id = ? AND substr(id, 1, 16) = ? AND id != ?").run(me.id, prefix, me.session_id);
+  send(res, 200, { closed: r.changes });
+});
+
+route('DELETE', '/api/me', async (req, res) => {
+  const me = requireUser(req);
+  limit('delaccount:' + me.id, 5, HOUR, 'Demasiados intentos');
+  const b = await readBody(req);
+  if (String(b.confirm || '').toLowerCase() !== me.username.toLowerCase()) throw new HttpError(400, 'Escribe tu nombre de usuario para confirmar');
+  await confirmPassword(req, me, b.password);
+  // Borra todos sus archivos del disco y luego la cuenta (la base de datos borra en cascada todo lo demas)
+  const uploads = new Set([me.avatar, me.banner].filter(Boolean));
+  for (const f of postFiles('p.user_id = ?', me.id)) uploads.add(f);
+  for (const r of db.prepare('SELECT url FROM media_uploads WHERE user_id = ?').all(me.id)) uploads.add(r.url);
+  const stored = db.prepare('SELECT f.stored FROM project_files f JOIN projects p ON p.id = f.project_id WHERE p.user_id = ?').all(me.id).map(r => r.stored);
+  db.prepare('DELETE FROM users WHERE id = ?').run(me.id);
+  for (const u of uploads) fs.rm(path.join(UPLOADS, path.basename(u)), () => {});
+  for (const f of stored) fs.rm(path.join(FILES, f), () => {});
+  securityLog('cuenta_borrada', req, me.username);
+  send(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '', 0) });
 });
 
 route('GET', '/api/feed', async (req, res, url) => {

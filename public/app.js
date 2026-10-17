@@ -28,6 +28,9 @@ const ICONS = {
   layers: '<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M3 17V5a2 2 0 0 1 2-2h12"/>',
   video: '<rect x="2" y="6" width="14" height="12" rx="2"/><polygon points="22 8 16 12 22 16 22 8"/>',
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/><path d="M15.5 7.5l3 3L22 7l-3-3"/>',
+  monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
   x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
 };
 function icon(name) {
@@ -610,6 +613,83 @@ async function peoplePage() {
   shell.content.replaceChildren(pageTitle('Personas'), list);
 }
 
+// =============== Cuenta y seguridad ===============
+function passwordHint(pw, username) {
+  if (!pw) return '';
+  if (pw.length < 8) return 'Mínimo 8 caracteres';
+  if (username && username.length >= 3 && pw.toLowerCase().includes(username.toLowerCase())) return 'No puede contener tu usuario';
+  let score = 0;
+  if (pw.length >= 12) score++; if (pw.length >= 16) score++;
+  if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++; if (/\d/.test(pw)) score++; if (/[^A-Za-z0-9]/.test(pw)) score++;
+  return ['Débil', 'Aceptable', 'Buena', 'Fuerte', 'Muy fuerte', 'Muy fuerte'][score];
+}
+async function openSecurity() {
+  const body = h('div', { class: 'sec' }, h('div', { class: 'muted' }, 'Cargando…'));
+  const m = modal(h('div', {}, h('h2', {}, 'Cuenta y seguridad'), body));
+  async function paint() {
+    let data;
+    try { data = await api('GET', '/api/me/security'); } catch (e) { return body.replaceChildren(h('div', { class: 'error' }, e.message)); }
+    // --- contraseña
+    const cur = h('input', { type: 'password', autocomplete: 'current-password' });
+    const next = h('input', { type: 'password', autocomplete: 'new-password' });
+    const rep2 = h('input', { type: 'password', autocomplete: 'new-password' });
+    const hint = h('small', { class: 'pw-hint muted' });
+    next.oninput = () => { hint.textContent = passwordHint(next.value, me.username); };
+    const pwBtn = h('button', { class: 'btn' }, 'Cambiar contraseña');
+    pwBtn.onclick = async () => {
+      if (next.value !== rep2.value) return toast('Las contraseñas nuevas no coinciden');
+      pwBtn.disabled = true;
+      try { await api('POST', '/api/me/password', { current: cur.value, next: next.value }); toast('Contraseña cambiada. Se han cerrado tus otras sesiones.'); paint(); }
+      catch (e) { toast(e.message); }
+      pwBtn.disabled = false;
+    };
+    // --- sesiones
+    const others = data.sessions.filter(x => !x.current).length;
+    const sessions = h('div', { class: 'sessions' }, ...data.sessions.map(x => h('div', { class: 'session' },
+      h('span', { class: 'ficon' }, icon('monitor')),
+      h('div', { class: 'session-txt' },
+        h('b', {}, x.device, x.current && h('span', { class: 'tag' }, 'Este dispositivo')),
+        h('small', { class: 'muted' }, `${x.ip || 'IP desconocida'} · último uso ${timeAgo(x.lastUsed)} · desde ${new Date(x.createdAt).toLocaleDateString('es-ES')}`)),
+      !x.current && h('button', { class: 'btn ghost small', onclick: async () => {
+        try { await api('DELETE', `/api/me/sessions/${x.id}`); toast('Sesión cerrada'); paint(); } catch (e) { toast(e.message); }
+      } }, 'Cerrar'))));
+    const closeAll = others && h('button', { class: 'btn ghost', onclick: async () => {
+      try { const r = await api('POST', '/api/me/sessions/close-others'); toast(`${r.closed} sesión${r.closed === 1 ? '' : 'es'} cerrada${r.closed === 1 ? '' : 's'}`); paint(); }
+      catch (e) { toast(e.message); }
+    } }, 'Cerrar todas las demás');
+    // --- borrar cuenta
+    const delBtn = h('button', { class: 'btn danger' }, 'Borrar mi cuenta para siempre');
+    delBtn.onclick = () => {
+      const conf = h('input', { type: 'text', placeholder: me.username });
+      const pw = h('input', { type: 'password', autocomplete: 'current-password' });
+      const go = h('button', { class: 'btn danger' }, 'Sí, borrar todo');
+      go.onclick = async () => {
+        go.disabled = true;
+        try { await api('DELETE', '/api/me', { confirm: conf.value, password: pw.value }); md.close(); m.close(); me = null; toast('Cuenta borrada'); location.hash = '#/'; render(); }
+        catch (e) { toast(e.message); go.disabled = false; }
+      };
+      const md = modal(h('div', {}, h('h2', {}, '¿Borrar tu cuenta?'),
+        h('p', {}, 'Se borrarán para siempre tu perfil, tus proyectos con sus archivos, tus publicaciones y tus mensajes. No se puede deshacer.'),
+        h('label', {}, `Escribe tu usuario (${me.username}) para confirmar`), conf,
+        h('label', {}, 'Tu contraseña'), pw,
+        h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => md.close() }, 'Cancelar'), go)));
+    };
+    body.replaceChildren(
+      h('section', { class: 'sec-block' }, h('h3', {}, icon('key'), 'Cambiar contraseña'),
+        h('label', {}, 'Contraseña actual'), cur,
+        h('label', {}, 'Nueva contraseña'), next, hint,
+        h('label', {}, 'Repite la nueva contraseña'), rep2,
+        h('p', { class: 'muted small-note' }, 'Mínimo 8 caracteres, que no sea una contraseña típica ni contenga tu usuario. Al cambiarla se cierran tus otras sesiones.'),
+        h('div', { class: 'row' }, h('div', { class: 'spacer' }), pwBtn)),
+      h('section', { class: 'sec-block' }, h('h3', {}, icon('monitor'), `Sesiones abiertas (${data.sessions.length})`),
+        h('p', { class: 'muted small-note' }, 'Si ves un dispositivo que no reconoces, ciérralo y cambia tu contraseña.'),
+        sessions, closeAll && h('div', { class: 'row', style: 'margin-top:10px' }, h('div', { class: 'spacer' }), closeAll)),
+      h('section', { class: 'sec-block danger-zone' }, h('h3', {}, icon('trash'), 'Zona peligrosa'),
+        h('p', { class: 'muted small-note' }, 'Borra tu cuenta y todo tu contenido de Tinker.'), delBtn));
+  }
+  paint();
+}
+
 // =============== Perfil ===============
 const SECTIONS = [
   { key: 'bienvenida', label: 'Bienvenida', ic: 'user' },
@@ -665,7 +745,8 @@ async function profilePage(username, section) {
       ctxButton('folder', 'Nuevo proyecto', () => openNewProject(() => {
         if (section === 'proyectos') render(); else location.hash = `${base}/proyectos`;
       })),
-      ctxButton('edit', 'Editar perfil', openEditProfile));
+      ctxButton('edit', 'Editar perfil', openEditProfile),
+      ctxButton('shield', 'Cuenta y seguridad', openSecurity));
   } else {
     const fb = followButton(user, f => { followersEl.textContent = Number(followersEl.textContent) + (f ? 1 : -1); });
     fb.dataset.extra = ' ctx-btn'; fb.repaint();
@@ -1190,7 +1271,7 @@ function authView() {
   const fields = {
     username: h('input', { type: 'text', autocomplete: 'username', maxlength: 20 }),
     displayName: h('input', { type: 'text', maxlength: 40 }),
-    password: h('input', { type: 'password', autocomplete: 'current-password' }),
+    password: h('input', { type: 'password', autocomplete: 'current-password', maxlength: 200 }),
     invite: h('input', { type: 'text' }),
   };
   const extra = h('div', {}, h('label', {}, 'Nombre visible'), fields.displayName,
