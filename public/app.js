@@ -495,12 +495,6 @@ function masonry(loader, emptyMsg) {
 }
 
 function tile(post, ctl) {
-  const meta = h('div', { class: 'tile-meta' },
-    h('a', { href: `#/u/${post.author.username}`, class: 'tile-author', onclick: e => e.stopPropagation() },
-      avatar(post.author, 'xs'), h('span', {}, post.author.displayName)),
-    h('span', { class: 'spacer' }),
-    post.project && h('a', { href: `#/p/${post.project.id}/multimedia`, class: 'tile-proj', title: post.project.name,
-      onclick: e => e.stopPropagation() }, icon('folder'), h('span', {}, post.project.name)));
   const media = post.media || [];
   const hasVideo = media.some(x => x.kind === 'video');
   const cover = post.image
@@ -512,8 +506,7 @@ function tile(post, ctl) {
     media.length > 1 && h('span', { title: `${media.length} fotos o vídeos` }, icon('layers'), media.length));
   const t = h('article', { class: 'tile' },
     h('div', { class: 'tile-cover' }, cover, badges),
-    post.image && (post.title || post.text) && h('p', { class: 'tile-caption' }, post.title || post.text),
-    meta);
+    (post.image || (post.media || []).length) && (post.title || post.text) && h('p', { class: 'tile-caption' }, post.title || post.text));
   t.onclick = () => openPost(post, () => ctl.remove(t));
   return t;
 }
