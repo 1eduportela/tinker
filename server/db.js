@@ -131,10 +131,13 @@ const userCols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!userCols.includes('banner')) db.exec('ALTER TABLE users ADD COLUMN banner TEXT');
 if (!userCols.includes('about')) db.exec("ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''");
 if (!userCols.includes('invited_by')) db.exec('ALTER TABLE users ADD COLUMN invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL');
-if (!userCols.includes('is_admin')) db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
+if (!userCols.includes('is_admin')) {
+  db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
+  // Solo una vez, al crear la columna (bases de datos de antes de la moderación): la cuenta más antigua es la administradora.
+  // Ya no se hace en cada arranque: eso convertía en administrador a cualquiera cuando no quedaba ninguno.
+  db.exec('UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)');
+}
 if (!userCols.includes('suspended_at')) db.exec('ALTER TABLE users ADD COLUMN suspended_at INTEGER');
-// La primera cuenta registrada es la de administrador
-if (!db.prepare('SELECT 1 FROM users WHERE is_admin = 1').get()) db.exec('UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)');
 if (!userCols.includes('pass_params')) db.exec("ALTER TABLE users ADD COLUMN pass_params TEXT NOT NULL DEFAULT 'scrypt:16384:8:1'");
 const mediaCols = db.prepare('PRAGMA table_info(media_uploads)').all().map(c => c.name);
 if (!mediaCols.includes('size')) {

@@ -50,11 +50,12 @@ route('POST', '/api/register', async (req, res) => {
       const u2 = db.prepare('UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL').run(Date.now(), invite.id);
       if (!u2.changes) throw new HttpError(403, 'Esa invitacion ya se ha usado');
     }
-    info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, pass_params, invited_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(username, displayName, hash, salt, PASS_PARAMS, invite ? invite.created_by : null, Date.now());
+    // Solo el código maestro (el que ve el dueño en su consola) crea un administrador, y solo si no hay ninguno.
+    // En una instalación nueva la primera cuenta usa el código maestro, así que es la administradora.
+    const makeAdmin = isMaster && !db.prepare('SELECT 1 FROM users WHERE is_admin = 1').get();
+    info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, pass_params, invited_by, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(username, displayName, hash, salt, PASS_PARAMS, invite ? invite.created_by : null, makeAdmin ? 1 : 0, Date.now());
     if (invite) db.prepare('UPDATE invites SET used_by = ? WHERE id = ?').run(Number(info.lastInsertRowid), invite.id);
-    // La primera cuenta de una instalacion nueva es la administradora
-    if (!db.prepare('SELECT 1 FROM users WHERE is_admin = 1').get()) db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(Number(info.lastInsertRowid));
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   if (isMaster) rotateMasterCode();

@@ -69,3 +69,12 @@ test.beforeEach(async () => { srv = await startServer(); });
 test.afterEach(async () => { await srv.stop(); });
 
 // ------------------------------------------------------------------ pruebas
+test('#1 si el admin borra su cuenta, quien se registre despues NO pasa a ser admin', async () => {
+  const admin = await register(srv, 'admin_t');
+  const alice = await register(srv, 'alice_t');
+  const code = (await alice.call('POST', '/api/invites')).json.code;
+  assert.equal((await admin.call('DELETE', '/api/me', { confirm: 'admin_t', password: PW })).status, 200);
+  const nuevo = await register(srv, 'recien_llegado', code);
+  assert.equal((await nuevo.call('GET', '/api/me')).json.user.isAdmin, false,
+    'un recien llegado con una invitacion normal no debe convertirse en administrador');
+});
