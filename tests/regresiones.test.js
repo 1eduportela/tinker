@@ -111,3 +111,12 @@ test('#4 una subida de video cancelada no deja el archivo temporal abierto', asy
   }
   assert.deepEqual(left, [], 'el temporal deberia borrarse (y cerrarse) al cortarse la conexion');
 });
+test('#5 los videos de los proyectos admiten Range (Safari/iPhone y la barra de avance lo necesitan)', async () => {
+  const alice = await register(srv, 'alice_t');
+  const proj = (await alice.call('POST', '/api/projects', { name: 'P' })).json.project;
+  const f = (await alice.call('POST', `/api/projects/${proj.id}/files?path=demo.mp4`, Buffer.alloc(4096))).json.file;
+  const r = await alice.call('GET', `/api/files/${f.id}`, undefined, { Range: 'bytes=0-99' });
+  assert.equal(r.status, 206);
+  assert.equal(r.headers.get('content-range'), 'bytes 0-99/4096');
+  assert.equal(r.text.length, 100);
+});

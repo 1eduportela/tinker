@@ -10,6 +10,7 @@ const { HttpError } = require('../http/errors');
 const { receiveToFile } = require('../http/request');
 const { send } = require('../http/response');
 const { route } = require('../http/router');
+const { sendFile } = require('../http/static');
 const { cleanPath } = require('../http/validate');
 const { HOUR } = require('../lib/units');
 const { limit } = require('../security/rate-limit');
@@ -79,7 +80,7 @@ route('GET', '/api/files/(\\d+)', async (req, res, url, [id]) => {
   const name = f.path.split('/').pop();
   const ext = path.extname(name).toLowerCase();
   const mode = url.searchParams.get('as');
-  const headers = { 'X-Content-Type-Options': 'nosniff', 'Content-Length': f.size };
+  const headers = { 'X-Content-Type-Options': 'nosniff' };
   if (mode === 'text') {
     headers['Content-Type'] = 'text/plain; charset=utf-8';
     headers['Content-Security-Policy'] = 'sandbox';
@@ -90,6 +91,5 @@ route('GET', '/api/files/(\\d+)', async (req, res, url, [id]) => {
     headers['Content-Type'] = 'application/octet-stream';
     headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
   }
-  res.writeHead(200, headers);
-  fs.createReadStream(path.join(FILES, f.stored)).on('error', () => res.end()).pipe(res);
+  sendFile(req, res, path.join(FILES, f.stored), f.size, headers);
 });
