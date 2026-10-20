@@ -131,3 +131,14 @@ test('#6 un cuerpo que no es JSON se rechaza tambien si llega sin Content-Length
   });
   assert.equal(status, 415);
 });
+
+test('#7 el avatar y el banner se comprueban por su contenido, no por lo que dice el navegador', async () => {
+  const alice = await register(srv, 'alice_t');
+  const html = Buffer.from('<html><script>alert(1)</script></html>').toString('base64');
+  const r = await alice.call('PUT', '/api/me', { displayName: 'Alice', avatar: `data:image/png;base64,${html}` });
+  assert.equal(r.status, 400, 'un HTML disfrazado de PNG no debe guardarse como avatar');
+  const jpg = '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAA//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AN//Z';
+  const ok = await alice.call('PUT', '/api/me', { displayName: 'Alice', banner: `data:image/png;base64,${jpg}` });
+  assert.equal(ok.status, 200, 'una foto de verdad sí se acepta');
+  assert.match(ok.json.user.banner, /\.jpg$/, 'la extensión sale del contenido (es un JPEG aunque diga png)');
+});
