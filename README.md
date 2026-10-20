@@ -35,7 +35,7 @@ web/                 el código de la web (React)
 public/              la web ya compilada (la genera "npm run build"; es lo que sirve el servidor)
 data/                base de datos, fotos, archivos de proyectos y configuración (no se sube al repositorio)
 demo/                perfiles de prueba
-tests/               pruebas de seguridad
+tests/               pruebas: seguridad (ataques) y regresiones (un fallo arreglado = una prueba)
 ```
 Las dependencias van siempre en un sentido: rutas → servicios → base de datos, y páginas → componentes → núcleo.
 
@@ -71,8 +71,9 @@ Las imágenes se generan con `python3 demo/generar_imagenes.py`.
   el navegador; cuotas de 3 GB por persona y 1,5 GB al día; limpieza automática de archivos huérfanos.
 - **Límites de uso** en registros, mensajes, publicaciones, subidas y peticiones en general.
 - **Moderación**: bloquear usuarios; la primera cuenta es administradora y puede suspender cuentas y borrar contenido.
+  Solo el código maestro crea administradores, y solo si no queda ninguno.
 - **Registro**: `data/seguridad.log` apunta inicios de sesión, fallos, bloqueos y acciones de moderación.
-- **Pruebas**: `node --test tests/seguridad.test.js` (o `Probar seguridad.bat`) ataca una copia temporal.
+- **Pruebas**: `npm test` (o `Probar seguridad.bat`) ataca una copia temporal y comprueba que no vuelve ningún fallo ya arreglado.
 
 ### Para publicarla en internet
 Pon delante un intermediario con HTTPS (Cloudflare Tunnel, Caddy...) y cambia `"trustProxy": true` en
