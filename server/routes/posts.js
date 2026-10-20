@@ -55,16 +55,18 @@ route('POST', '/api/posts', async (req, res) => {
   const urls = clean.flatMap(m => [m.url, m.poster]).filter(Boolean);
   if (new Set(urls).size !== urls.length) throw new HttpError(400, 'Hay archivos repetidos en la publicacion');
   const cover = clean[0].kind === 'image' ? clean[0].url : clean[0].poster;
+  let postId;
   db.exec('BEGIN');
   try {
     const info = db.prepare('INSERT INTO posts (user_id, project_id, title, text, image, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(me.id, project.id, title, text, cover, Date.now());
-    const postId = Number(info.lastInsertRowid);
+    postId = Number(info.lastInsertRowid);
     clean.forEach((m, i) => db.prepare('INSERT INTO post_media (post_id, position, kind, url, poster, width, height) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(postId, i, m.kind, m.url, m.poster, m.width, m.height));
     db.exec('COMMIT');
-    send(res, 200, { post: getPost(postId, me) });
   } catch (e) { db.exec('ROLLBACK'); throw e; }
+  // Fuera del try: si esto fallara tras el COMMIT, el ROLLBACK lanzaría otro error y taparía el de verdad
+  send(res, 200, { post: getPost(postId, me) });
 });
 
 // Borrar una publicación (su autor o un administrador)

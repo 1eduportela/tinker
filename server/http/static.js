@@ -28,20 +28,26 @@ function serveUpload(req, res, rel) {
   if (!type || name.startsWith('tmp-')) { res.writeHead(404); return res.end(); }
   fs.stat(file, (err, st) => {
     if (err) { res.writeHead(404); return res.end('No encontrado'); }
-    const headers = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff',
-      'Cache-Control': 'private, max-age=86400' };
-    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
-    if (m && (m[1] || m[2])) {
-      let start = m[1] ? Number(m[1]) : st.size - Number(m[2]);
-      let end = m[1] && m[2] ? Number(m[2]) : st.size - 1;
-      if (start >= st.size || start < 0 || end < start) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
-      end = Math.min(end, st.size - 1);
-      res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
-      return fs.createReadStream(file, { start, end }).pipe(res);
-    }
-    res.writeHead(200, { ...headers, 'Content-Length': st.size });
-    fs.createReadStream(file).pipe(res);
+    sendFile(req, res, file, st.size, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=86400' });
   });
 }
 
-module.exports = { serveFile, serveUpload };
+// Envía un archivo del disco con soporte de Range (avanzar en vídeos; Safari/iPhone no los reproduce sin él).
+// La usan las fotos/vídeos subidos y los archivos de proyecto.
+function sendFile(req, res, file, size, headers) {
+  headers = { ...headers, 'Accept-Ranges': 'bytes' };
+  let start = 0, end = size - 1, status = 200;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  if (m && (m[1] || m[2])) {
+    if (m[1]) { start = Number(m[1]); if (m[2]) end = Math.min(Number(m[2]), size - 1); }
+    else start = Math.max(0, size - Number(m[2]));   // "bytes=-500": los últimos 500
+    if (start >= size || end < start) { res.writeHead(416, { 'Content-Range': `bytes */${size}` }); return res.end(); }
+    status = 206; headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+  }
+  res.writeHead(status, { ...headers, 'Content-Length': Math.max(0, end - start + 1) });
+  if (size === 0) return res.end();
+  // Si el archivo desaparece a mitad (limpieza, borrado), se corta la respuesta en vez de dejar un error sin manejar
+  fs.createReadStream(file, { start, end }).on('error', () => res.destroy()).pipe(res);
+}
+
+module.exports = { sendFile, serveFile, serveUpload };

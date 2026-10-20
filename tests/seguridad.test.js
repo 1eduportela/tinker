@@ -1,7 +1,7 @@
 'use strict';
 // Pruebas de seguridad de Tinker: arrancan un servidor de prueba en una carpeta temporal
 // (no tocan tus datos) y lo atacan como lo haría alguien malintencionado.
-//   Ejecutar:  node --test tests/      (o doble clic en "Probar seguridad.bat")
+//   Ejecutar:  npm test   (o node --test "tests/*.test.js", o doble clic en "Probar seguridad.bat")
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');

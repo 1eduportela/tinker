@@ -36,7 +36,6 @@ export function FilesView({ project, autoUpload, onCount, ref }) {
   const dir = cwd && !files.some(f => f.path.startsWith(cwd)) ? '' : cwd;
 
   async function upload(list) {
-    list = list.filter(x => x.file.size > 0 || x.file.type !== '');
     const big = list.filter(x => x.file.size > MAX);
     if (big.length) toast(`${big.length} archivo(s) pasan de 50 MB y no se subirán`);
     list = list.filter(x => x.file.size <= MAX);

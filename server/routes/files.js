@@ -7,9 +7,10 @@ const crypto = require('node:crypto');
 const { FILES, MAX_FILE } = require('../config');
 const { db } = require('../db');
 const { HttpError } = require('../http/errors');
-const { readRaw } = require('../http/request');
+const { receiveToFile } = require('../http/request');
 const { send } = require('../http/response');
 const { route } = require('../http/router');
+const { sendFile } = require('../http/static');
 const { cleanPath } = require('../http/validate');
 const { HOUR } = require('../lib/units');
 const { limit } = require('../security/rate-limit');
@@ -33,16 +34,18 @@ route('POST', '/api/projects/(\\d+)/files', async (req, res, url, [id]) => {
   const filePath = cleanPath(url.searchParams.get('path'));
   const allowance = uploadAllowance(req, me.id);
   if (db.prepare('SELECT COUNT(*) AS n FROM project_files WHERE project_id = ?').get(p.id).n >= 2000) throw new HttpError(400, 'Este proyecto ya tiene 2.000 archivos, que es el maximo');
-  const data = await readRaw(req, Math.min(MAX_FILE, allowance));
+  // Directo a disco (antes se juntaba entero en memoria: hasta 50 MB por subida)
+  const max = Math.min(MAX_FILE, allowance);
   const stored = crypto.randomBytes(16).toString('hex');
-  fs.writeFileSync(path.join(FILES, stored), data);
+  const size = await receiveToFile(req, path.join(FILES, stored), max, () => new HttpError(413,
+    max < MAX_FILE ? 'No te queda espacio suficiente para este archivo' : 'Archivo demasiado grande (max. 50 MB)'));
   const old = db.prepare('SELECT id, stored FROM project_files WHERE project_id = ? AND path = ?').get(p.id, filePath);
   if (old) {
-    db.prepare('UPDATE project_files SET size = ?, stored = ?, created_at = ? WHERE id = ?').run(data.length, stored, Date.now(), old.id);
+    db.prepare('UPDATE project_files SET size = ?, stored = ?, created_at = ? WHERE id = ?').run(size, stored, Date.now(), old.id);
     fs.rm(path.join(FILES, old.stored), () => {});
   } else {
     db.prepare('INSERT INTO project_files (project_id, path, size, stored, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(p.id, filePath, data.length, stored, Date.now());
+      .run(p.id, filePath, size, stored, Date.now());
   }
   send(res, 200, { file: mapFile(db.prepare('SELECT * FROM project_files WHERE project_id = ? AND path = ?').get(p.id, filePath)) });
 });
@@ -77,7 +80,7 @@ route('GET', '/api/files/(\\d+)', async (req, res, url, [id]) => {
   const name = f.path.split('/').pop();
   const ext = path.extname(name).toLowerCase();
   const mode = url.searchParams.get('as');
-  const headers = { 'X-Content-Type-Options': 'nosniff', 'Content-Length': f.size };
+  const headers = { 'X-Content-Type-Options': 'nosniff' };
   if (mode === 'text') {
     headers['Content-Type'] = 'text/plain; charset=utf-8';
     headers['Content-Security-Policy'] = 'sandbox';
@@ -88,6 +91,5 @@ route('GET', '/api/files/(\\d+)', async (req, res, url, [id]) => {
     headers['Content-Type'] = 'application/octet-stream';
     headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(name)}`;
   }
-  res.writeHead(200, headers);
-  fs.createReadStream(path.join(FILES, f.stored)).on('error', () => res.end()).pipe(res);
+  sendFile(req, res, path.join(FILES, f.stored), f.size, headers);
 });

@@ -30,7 +30,9 @@ function Body({ f, name, ext }) {
   useEffect(() => {
     if (!isText) return;
     let alive = true;
-    fetch(`/api/files/${f.id}?as=text`).then(r => r.text()).then(t => alive && setText(t), () => alive && setText(false));
+    fetch(`/api/files/${f.id}?as=text`)
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(t => alive && setText(t), () => alive && setText(false));
     return () => { alive = false; };
   }, [f.id, isText]);
 

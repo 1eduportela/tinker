@@ -14,7 +14,10 @@ function saveImage(dataUrl) {
   if (!m) throw new HttpError(400, 'Imagen no valida');
   const buf = Buffer.from(m[2], 'base64');
   if (buf.length > 6 * 1024 * 1024) throw new HttpError(413, 'Imagen demasiado grande');
-  const name = crypto.randomBytes(12).toString('hex') + '.' + (m[1] === 'jpeg' ? 'jpg' : m[1]);
+  // Lo que cuenta es lo que hay dentro, no lo que dice el navegador (igual que con las fotos de las publicaciones)
+  const type = sniffMedia(buf);
+  if (!type || type.kind !== 'image') throw new HttpError(400, 'Imagen no valida');
+  const name = crypto.randomBytes(12).toString('hex') + '.' + type.ext;
   fs.writeFileSync(path.join(UPLOADS, name), buf);
   return '/uploads/' + name;
 }

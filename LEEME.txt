@@ -30,6 +30,7 @@ INVITAR A ALGUIEN
 
 TU CUENTA
 - La primera cuenta registrada es la de ADMINISTRADOR: puede suspender cuentas y borrar contenido.
+  Si algun dia no queda ningun administrador, la siguiente cuenta creada con el codigo maestro lo sera.
 - En tu perfil > "Cuenta y seguridad": cambiar la contrasena, ver y cerrar sesiones, ver tu espacio
   y borrar tu cuenta.
 

@@ -42,22 +42,33 @@ route('POST', '/api/register', async (req, res) => {
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) throw new HttpError(409, 'Ese usuario ya existe');
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = await hashPasswordAsync(password, salt);
+  // Desde aquí hasta el COMMIT no hay ningún await: Node no atiende otra petición entre medias,
+  // así que comprobar y gastar el código es una sola operación.
   db.exec('BEGIN');
   let info;
   try {
+    // El código maestro se vuelve a comprobar: mientras se cifraba la contraseña (await de arriba)
+    // otro registro pudo gastarlo
+    if (isMaster && normCode(config.inviteCode) !== code) throw new HttpError(403, 'Ese codigo ya se ha usado');
     // La invitacion se marca como usada en la misma operacion: nunca puede usarse dos veces
     if (invite) {
       const u2 = db.prepare('UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL').run(Date.now(), invite.id);
       if (!u2.changes) throw new HttpError(403, 'Esa invitacion ya se ha usado');
     }
-    info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, pass_params, invited_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(username, displayName, hash, salt, PASS_PARAMS, invite ? invite.created_by : null, Date.now());
+    // Solo el código maestro (el que ve el dueño en su consola) crea un administrador, y solo si no hay ninguno.
+    // En una instalación nueva la primera cuenta usa el código maestro, así que es la administradora.
+    const makeAdmin = isMaster && !db.prepare('SELECT 1 FROM users WHERE is_admin = 1').get();
+    info = db.prepare('INSERT INTO users (username, display_name, pass_hash, salt, pass_params, invited_by, is_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(username, displayName, hash, salt, PASS_PARAMS, invite ? invite.created_by : null, makeAdmin ? 1 : 0, Date.now());
     if (invite) db.prepare('UPDATE invites SET used_by = ? WHERE id = ?').run(Number(info.lastInsertRowid), invite.id);
-    // La primera cuenta de una instalacion nueva es la administradora
-    if (!db.prepare('SELECT 1 FROM users WHERE is_admin = 1').get()) db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(Number(info.lastInsertRowid));
+    if (isMaster) rotateMasterCode();
     db.exec('COMMIT');
-  } catch (e) { db.exec('ROLLBACK'); throw e; }
-  if (isMaster) rotateMasterCode();
+  } catch (e) {
+    db.exec('ROLLBACK');
+    // Dos registros con el mismo usuario a la vez: los dos pasaron la comprobación de arriba antes del await
+    if (/UNIQUE constraint failed: users\.username/.test(e.message)) throw new HttpError(409, 'Ese usuario ya existe');
+    throw e;
+  }
   securityLog('registro', req, `${username} (${isMaster ? 'codigo maestro' : 'invitacion ' + invite.hint})`);
   return startSession(req, res, Number(info.lastInsertRowid));
 });

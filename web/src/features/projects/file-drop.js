@@ -4,7 +4,9 @@
 export async function filesFromDrop(dt) {
   const out = [];
   const items = [...(dt.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
-  if (!items.length) return [...dt.files].map(f => ({ file: f, path: f.name }));
+  // Navegadores sin webkitGetAsEntry: las carpetas llegan como "archivos" vacíos y sin tipo, y se descartan.
+  // (Solo aquí: en el resto de casos un archivo vacío, como __init__.py o .gitkeep, es un archivo de verdad.)
+  if (!items.length) return [...dt.files].filter(f => f.size > 0 || f.type !== '').map(f => ({ file: f, path: f.name }));
   const walk = async (entry, prefix) => {
     if (entry.isFile) {
       const file = await new Promise((res, rej) => entry.file(res, rej));
