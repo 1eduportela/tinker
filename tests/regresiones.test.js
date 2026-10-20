@@ -94,3 +94,20 @@ test('#3 dos registros simultaneos con el mismo usuario: 200 y 409, nunca 500', 
     client(srv.base).call('POST', '/api/register', { username: 'duplicado', password: PW, invite: code })));
   assert.deepEqual(results.map(r => r.status).sort(), [200, 409]);
 });
+test('#4 una subida de video cancelada no deja el archivo temporal abierto', async () => {
+  const alice = await register(srv, 'alice_t');
+  await new Promise(done => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, path: '/api/media?kind=video', method: 'POST',
+      headers: { Cookie: alice.cookie, 'Content-Length': 10 * 1024 * 1024 } });
+    req.on('error', () => {});
+    req.write(Buffer.alloc(512 * 1024));
+    setTimeout(() => { req.destroy(); done(); }, 200);   // el usuario cierra la pestana a mitad
+  });
+  let left = [];
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 100));
+    left = fs.readdirSync(path.join(srv.dir, 'uploads')).filter(n => n.startsWith('tmp-'));
+    if (!left.length) break;
+  }
+  assert.deepEqual(left, [], 'el temporal deberia borrarse (y cerrarse) al cortarse la conexion');
+});

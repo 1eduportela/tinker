@@ -1,7 +1,10 @@
 'use strict';
 // Lectura de peticiones: cuerpo JSON o binario con límite de tamaño, cookies, IP y si es HTTPS.
 
-const { MAX_FILE, config } = require('../config');
+const fs = require('node:fs');
+const { Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
+const { config } = require('../config');
 const { HttpError } = require('./errors');
 
 // Cuerpo JSON (máx. 8 MB por defecto)
@@ -27,18 +30,23 @@ function readBody(req, limit = 8 * 1024 * 1024) {
     req.on('error', reject);
   });
 }
-// Cuerpo binario tal cual (subida de archivos de proyecto)
-function readRaw(req, limit) {
-  return new Promise((resolve, reject) => {
-    let size = 0; const chunks = [];
-    req.on('data', c => {
-      size += c.length;
-      if (size > limit) { reject(new HttpError(413, limit < MAX_FILE ? 'No te queda espacio suficiente para este archivo' : 'Archivo demasiado grande (max. 50 MB)')); req.resume(); return; }
-      chunks.push(c);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+// Cuerpo binario directo a un archivo, sin cargarlo en memoria (fotos, vídeos y archivos de proyecto).
+// Si pasa de maxBytes o la conexión se corta a mitad, borra el archivo y lanza el error:
+// pipeline() cierra todos los streams pase lo que pase, así que nunca queda nada abierto.
+async function receiveToFile(req, file, maxBytes, tooBig) {
+  if (Number(req.headers['content-length'] || 0) > maxBytes) { req.resume(); throw tooBig(); }
+  let size = 0;
+  const limiter = new Transform({
+    transform(chunk, _enc, cb) { size += chunk.length; cb(size > maxBytes ? tooBig() : null, chunk); },
   });
+  try {
+    await pipeline(req, limiter, fs.createWriteStream(file));
+    return size;
+  } catch (e) {
+    fs.rm(file, { force: true }, () => {});
+    if (e.code === 'ERR_STREAM_PREMATURE_CLOSE') throw new HttpError(400, 'La subida se ha cortado');
+    throw e;
+  }
 }
 
 function parseCookies(req) {
@@ -66,4 +74,4 @@ function isHttps(req) {
   return !!config.trustProxy && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
 }
 
-module.exports = { clientIp, isHttps, parseCookies, readBody, readRaw };
+module.exports = { clientIp, isHttps, parseCookies, readBody, receiveToFile };

@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { MAX_IMAGE, MAX_VIDEO, UPLOADS } = require('../config');
 const { db } = require('../db');
 const { HttpError } = require('../http/errors');
+const { receiveToFile } = require('../http/request');
 const { send } = require('../http/response');
 const { route } = require('../http/router');
 const { HOUR } = require('../lib/units');
@@ -24,21 +25,8 @@ route('POST', '/api/media', async (req, res, url) => {
   const allowance = uploadAllowance(req, me.id);
   const maxSize = Math.min(want === 'video' ? MAX_VIDEO : MAX_IMAGE, allowance);
   const tmp = path.join(UPLOADS, 'tmp-' + crypto.randomBytes(8).toString('hex'));
-  await new Promise((resolve, reject) => {
-    let size = 0, failed = false;
-    const out = fs.createWriteStream(tmp);
-    req.on('data', c => {
-      size += c.length;
-      if (size > maxSize && !failed) {
-        failed = true; req.unpipe(out); out.destroy(); fs.rm(tmp, () => {}); req.resume();
-        reject(new HttpError(413, maxSize < (want === 'video' ? MAX_VIDEO : MAX_IMAGE) ? 'No te queda espacio suficiente para este archivo'
-          : want === 'video' ? 'El video pasa de 300 MB' : 'La foto pasa de 15 MB'));
-      }
-    });
-    req.pipe(out);
-    out.on('finish', () => { if (!failed) resolve(); });
-    out.on('error', e => { if (!failed) { failed = true; reject(e); } });
-  });
+  await receiveToFile(req, tmp, maxSize, () => new HttpError(413, maxSize < (want === 'video' ? MAX_VIDEO : MAX_IMAGE)
+    ? 'No te queda espacio suficiente para este archivo' : want === 'video' ? 'El video pasa de 300 MB' : 'La foto pasa de 15 MB'));
   const fd = fs.openSync(tmp, 'r'); const head = Buffer.alloc(16); fs.readSync(fd, head, 0, 16, 0); fs.closeSync(fd);
   const type = sniffMedia(head);
   if (!type || type.kind !== want) {
