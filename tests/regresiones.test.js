@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..');
 const PW = 'Clave-de-prueba-2026';
@@ -141,4 +142,13 @@ test('#7 el avatar y el banner se comprueban por su contenido, no por lo que dic
   const ok = await alice.call('PUT', '/api/me', { displayName: 'Alice', banner: `data:image/png;base64,${jpg}` });
   assert.equal(ok.status, 200, 'una foto de verdad sí se acepta');
   assert.match(ok.json.user.banner, /\.jpg$/, 'la extensión sale del contenido (es un JPEG aunque diga png)');
+});
+
+test('#8 Markdown: las imágenes de otras webs salen como enlace (la CSP no las deja cargar)', () => {
+  const code = fs.readFileSync(path.join(ROOT, 'web', 'src', 'core', 'markdown.js'), 'utf8').replace(/^export /gm, '');
+  const ctx = {}; vm.createContext(ctx); vm.runInContext(code + '; this.markdown = markdown;', ctx);
+  const html = ctx.markdown('![plano](https://example.com/plano.png)\n\n![foto](/uploads/0123456789abcdef01234567.jpg)');
+  assert.ok(!/<img[^>]+example\.com/.test(html), html);
+  assert.match(html, /<a href="https:\/\/example\.com\/plano\.png"[^>]*>plano<\/a>/);
+  assert.match(html, /<img alt="foto" src="\/uploads\/0123456789abcdef01234567\.jpg">/, 'las fotos de Tinker siguen saliendo como imagen');
 });

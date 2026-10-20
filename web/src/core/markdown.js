@@ -4,7 +4,10 @@ export function markdown(src) {
   const inline = t => {
     const codes = [];
     t = esc(t).replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
-    t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|\/uploads\/[^)\s]+|\/api\/files\/\d+[^)\s]*)\)/g, '<img alt="$1" src="$2">')
+    t = t.replace(/!\[([^\]]*)\]\((\/uploads\/[^)\s]+|\/api\/files\/\d+[^)\s]*)\)/g, '<img alt="$1" src="$2">')
+      // Imágenes de otras webs: la CSP (img-src 'self') no las deja cargar, y cargarlas le daría a esa web
+      // la IP de quien lee. Se muestran como enlace.
+      .replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, (_, alt, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${alt || url}</a>`)
       .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^*\w])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
