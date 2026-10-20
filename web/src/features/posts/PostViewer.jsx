@@ -35,7 +35,8 @@ function PostViewer({ post, close, onDelete }) {
         </div>
         <div className="pm-body">
           {post.title && <h2 className="pm-title">{post.title}</h2>}
-          {post.image && post.text && <p className="pm-text">{post.text}</p>}
+          {/* Si no hay fotos ni vídeos, el texto ya se ve en grande arriba (publicaciones antiguas) */}
+          {post.media && post.media.length > 0 && post.text && <p className="pm-text">{post.text}</p>}
           {post.project && <a href={`#/p/${post.project.id}/multimedia`} className="proj-btn">
             <Icon name="folder" /><span>{post.project.name}</span><span className="arrow">→</span>
           </a>}
