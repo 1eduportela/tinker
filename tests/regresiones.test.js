@@ -78,3 +78,19 @@ test('#1 si el admin borra su cuenta, quien se registre despues NO pasa a ser ad
   assert.equal((await nuevo.call('GET', '/api/me')).json.user.isAdmin, false,
     'un recien llegado con una invitacion normal no debe convertirse en administrador');
 });
+test('#2 el codigo maestro solo sirve una vez aunque lleguen registros a la vez', async () => {
+  await register(srv, 'admin_t');
+  const code = srv.master();
+  const results = await Promise.all(['carrera_a', 'carrera_b', 'carrera_c'].map(u =>
+    client(srv.base).call('POST', '/api/register', { username: u, password: PW, invite: code })));
+  assert.equal(results.filter(r => r.status === 200).length, 1,
+    `codigos: ${results.map(r => r.status).join(', ')}`);
+});
+test('#3 dos registros simultaneos con el mismo usuario: 200 y 409, nunca 500', async () => {
+  const admin = await register(srv, 'admin_t');
+  const c1 = (await admin.call('POST', '/api/invites')).json.code;
+  const c2 = (await admin.call('POST', '/api/invites')).json.code;
+  const results = await Promise.all([c1, c2].map(code =>
+    client(srv.base).call('POST', '/api/register', { username: 'duplicado', password: PW, invite: code })));
+  assert.deepEqual(results.map(r => r.status).sort(), [200, 409]);
+});
