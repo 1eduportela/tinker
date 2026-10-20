@@ -120,3 +120,14 @@ test('#5 los videos de los proyectos admiten Range (Safari/iPhone y la barra de 
   assert.equal(r.headers.get('content-range'), 'bytes 0-99/4096');
   assert.equal(r.text.length, 100);
 });
+test('#6 un cuerpo que no es JSON se rechaza tambien si llega sin Content-Length (chunked)', async () => {
+  const alice = await register(srv, 'alice_t');
+  const status = await new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: srv.port, path: '/api/projects', method: 'POST',
+      headers: { Cookie: alice.cookie, 'Content-Type': 'text/plain', 'Transfer-Encoding': 'chunked' } },
+    res => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+    req.on('error', reject);
+    req.end(JSON.stringify({ name: 'colado como text/plain' }));
+  });
+  assert.equal(status, 415);
+});

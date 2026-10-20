@@ -11,7 +11,9 @@ const { HttpError } = require('./errors');
 function readBody(req, limit = 8 * 1024 * 1024) {
   // Solo se acepta JSON: asi otra web no puede mandar formularios "disfrazados" en nombre del usuario
   const type = String(req.headers['content-type'] || '');
-  if (Number(req.headers['content-length'] || 0) > 0 && !type.startsWith('application/json')) {
+  // Hay cuerpo si trae Content-Length > 0 o si llega por trozos (Transfer-Encoding: chunked)
+  const hasBody = Number(req.headers['content-length'] || 0) > 0 || req.headers['transfer-encoding'] !== undefined;
+  if (hasBody && !type.startsWith('application/json')) {
     req.resume();
     return Promise.reject(new HttpError(415, 'Formato de datos no valido'));
   }
